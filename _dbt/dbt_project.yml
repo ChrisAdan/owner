@@ -1,0 +1,32 @@
+# dbt_project.yml
+name: "owner"
+version: "1.0.0"
+profile: "owner"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  owner:
+    staging:
+      +materialized: view
+      +schema: "{{ env_var('DBT_SNOWFLAKE_SCHEMA', 'gtm_case_dev') }}"
+    intermediate:
+      +materialized: ephemeral
+    marts:
+      +materialized: table
+
+on-run-start:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "ALTER SESSION SET WEEK_START = 1"
+
+on-run-end:
+  - "{{ log('Run completed: ' ~ run_started_at, info=true) }}"
