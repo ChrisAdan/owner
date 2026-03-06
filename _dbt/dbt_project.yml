@@ -14,6 +14,18 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+seeds:
+  owner:
+    +quote_columns: true
+    leads:
+      +column_types:
+        LEAD_ID: varchar
+        SALES_CALL_COUNT: varchar
+        SALES_TEXT_COUNT: varchar
+        SALES_EMAIL_COUNT: varchar
+        LOCATION_COUNT: varchar
+        PREDICTED_SALES_WITH_OWNER: varchar
+
 models:
   owner:
     staging:
@@ -24,9 +36,9 @@ models:
     marts:
       +materialized: table
 
-on-run-start:
-  - "ALTER SESSION SET TIMEZONE = 'UTC'"
-  - "ALTER SESSION SET WEEK_START = 1"
+# on-run-start:
+#   - "ALTER SESSION SET TIMEZONE = 'UTC'"
+#   - "ALTER SESSION SET WEEK_START = 1"
 
 on-run-end:
   - "{{ log('Run completed: ' ~ run_started_at, info=true) }}"
