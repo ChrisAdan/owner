@@ -1,0 +1,77 @@
+name: dbt CI
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "_dbt/**"
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  dbt-ci:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: _dbt
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ${{ secrets.DBT_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.DBT_POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.DBT_POSTGRES_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install dbt-core dbt-postgres
+        working-directory: .
+
+      - name: Write profiles.yml
+        run: |
+          mkdir -p ~/.dbt
+          cat << EOF > ~/.dbt/profiles.yml
+          owner:
+            target: dev
+            outputs:
+              dev:
+                type: postgres
+                host: localhost
+                user: ${{ secrets.DBT_POSTGRES_USER }}
+                password: ${{ secrets.DBT_POSTGRES_PASSWORD }}
+                port: 5432
+                dbname: ${{ secrets.DBT_POSTGRES_DB }}
+                schema: gtm_case_dev
+                threads: 4
+          EOF
+        working-directory: .
+
+      - name: dbt debug
+        run: dbt debug
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt seed
+        run: dbt seed
+
+      - name: dbt run
+        run: dbt run
+
+      - name: dbt test
+        run: dbt test
