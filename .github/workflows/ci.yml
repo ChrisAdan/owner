@@ -4,7 +4,7 @@ on:
   push:
     branches: ["**"]
     paths:
-      - "owner/_dbt/**"
+      - "_dbt/**"
   pull_request:
     branches: [dev, main]
 
@@ -14,7 +14,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: owner/_dbt
+        working-directory: _dbt
 
     services:
       postgres:
