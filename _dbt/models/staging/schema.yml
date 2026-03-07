@@ -1,0 +1,257 @@
+version: 2
+
+models:
+  - name: stg_gtm__expenses_advertising
+    description: >
+      Staging model for monthly advertising spend. One row per calendar month.
+      Parses European-formatted currency and Mon-YY date from source.
+      Covers paid social and search (Facebook/IG, Google) for Jan–Jun 2024.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: expense_advertising_sk
+        description: "{{ doc('surrogate_key') }}"
+        data_type: varchar
+        constraints:
+          - type: not_null
+          - type: unique
+      - name: month_date
+        description: "{{ doc('month_label_format') }}"
+        data_type: date
+        constraints:
+          - type: not_null
+      - name: advertising_spend_usd
+        description: "{{ doc('european_currency_format') }}"
+        data_type: numeric(12,2)
+
+  - name: stg_gtm__expenses_salary_and_commissions
+    description: >
+      Staging model for monthly salary and commission costs by sales channel.
+      Unpivoted from wide (two channel columns) to long (one row per month per channel).
+      One row per calendar month per channel (inbound, outbound) for Jan–Jun 2024.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: expense_salary_sk
+        description: "{{ doc('surrogate_key') }}"
+        data_type: varchar
+        constraints:
+          - type: not_null
+          - type: unique
+      - name: month_date
+        description: "{{ doc('month_label_format') }}"
+        data_type: date
+        constraints:
+          - type: not_null
+      - name: sales_channel
+        description: "{{ doc('sales_channel') }}"
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: salary_and_commissions_usd
+        description: "{{ doc('european_currency_format') }}"
+        data_type: numeric(12,2)
+
+  - name: stg_gtm__opportunities
+    description: >
+      Staged sales opportunities. One row per opportunity — represents a lead that
+      has entered the formal sales process. Cleans date defects, derives stage flags,
+      and normalizes sparse free-text fields. Joins to stg_gtm__leads via
+      leads.converted_opportunity_id = opportunities.opportunity_id.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: opportunity_sk
+        description: "{{ doc('surrogate_key') }} Natural key: opportunity_id."
+        data_type: varchar
+        constraints:
+          - type: not_null
+          - type: unique
+      - name: opportunity_id
+        description: Salesforce opportunity identifier. Source primary key.
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: account_id
+        description: Salesforce account identifier linking opportunity to restaurant account.
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: stage_name
+        description: >
+          Current funnel stage. Values: Interest, Demo Set, In Progress,
+          Verbal Commitment, On Hold, Closed Won, Closed Lost.
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: is_won
+        description: True if stage_name = 'Closed Won'.
+        data_type: boolean
+      - name: is_lost
+        description: True if stage_name = 'Closed Lost'.
+        data_type: boolean
+      - name: is_open
+        description: True if opportunity has not yet reached a closed stage.
+        data_type: boolean
+      - name: attribution_source
+        description: >
+          How the prospect heard about Owner. 76% null. Where populated:
+          Facebook/IG, Cold call, Media Outlet, Youtube, Google,
+          Restaurant Referral, Word of mouth, Webinar, Other.
+        data_type: varchar
+      - name: lost_reason
+        description: >
+          Categorized reason for loss on closed lost opportunities.
+          Null on open and won opportunities, and on 4 closed lost rows
+          with missing data (flagged in audit model).
+        data_type: varchar
+      - name: closed_lost_notes
+        description: Free-text AE notes on lost deals. 74% null.
+        data_type: varchar
+      - name: business_issue
+        description: Free-text description of prospect's stated business problem. 74% null.
+        data_type: varchar
+      - name: demo_held
+        description: Whether a demo was actually conducted.
+        data_type: boolean
+        constraints:
+          - type: not_null
+      - name: created_at
+        description: Timestamp opportunity was created in Salesforce. No date defect.
+        data_type: timestamp
+        constraints:
+          - type: not_null
+      - name: demo_scheduled_at
+        description: Scheduled demo timestamp. 3% null. No date defect on this field.
+        data_type: timestamp
+      - name: last_sales_call_at
+        description: Timestamp of most recent AE call. 1% null. No date defect.
+        data_type: timestamp
+      - name: demo_set_date
+        description: >
+          Date demo was scheduled. 28% null. Source had millennium prefix defect
+          ('0024-xx-xx') corrected in staging via string overlay.
+        data_type: date
+      - name: close_date
+        description: >
+          Opportunity close date. Source had millennium prefix defect
+          ('0024-xx-xx') corrected in staging via string overlay.
+        data_type: date
+        constraints:
+          - type: not_null
+
+  - name: stg_gtm__leads
+    description: >
+      Staged leads. One row per lead — covers both inbound (form submission) and
+      outbound (BDR-sourced) prospects. Cleans date defects, normalizes status values,
+      parses European decimal GMV, and strips Python list syntax from array fields.
+      Array fields are not exploded here — bridge tables built in intermediate layer.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: lead_sk
+        description: "{{ doc('surrogate_key') }} Natural key: lead_id."
+        data_type: varchar
+        constraints:
+          - type: not_null
+          - type: unique
+      - name: lead_id
+        description: Salesforce lead identifier. Source primary key.
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: converted_opportunity_id
+        description: >
+          Foreign key to stg_gtm__opportunities.opportunity_id. Populated on
+          converted leads only (90% null). Exact match to opportunities row count (2,794).
+        data_type: varchar
+      - name: status
+        description: >
+          Normalized lead lifecycle status. Dirty value 'Incorrect_Contact_Data'
+          unified to 'Incorrect Contact Data'. Values: New, Working, Demo Set,
+          Sales Nurture, Marketing Nurture, Converted, Disqualified, Not Interested,
+          Incorrect Contact Data, No Longer With Company, No Show, Postpone,
+          Restaurant Confirmed, Nurturing.
+        data_type: varchar
+        constraints:
+          - type: not_null
+      - name: is_converted
+        description: True if status = 'Converted'.
+        data_type: boolean
+      - name: is_disqualified
+        description: >
+          True if lead is in a terminal non-converting state: Disqualified,
+          Not Interested, Incorrect Contact Data, No Longer With Company.
+        data_type: boolean
+      - name: sales_call_count
+        description: Total calls made to this lead. 21% null.
+        data_type: integer
+      - name: sales_text_count
+        description: Total texts sent to this lead. 52% null.
+        data_type: integer
+      - name: sales_email_count
+        description: Total emails sent to this lead. 48% null.
+        data_type: integer
+      - name: total_activity_count
+        description: >
+          Sum of calls, texts, and emails. Nulls coalesced to 0 before summing.
+          Leading indicator of engagement intensity.
+        data_type: integer
+      - name: connected_with_decision_maker
+        description: Boolean flag — whether SDR reached a decision maker.
+        data_type: boolean
+        constraints:
+          - type: not_null
+      - name: location_count
+        description: Number of restaurant locations for this lead. 4% null.
+        data_type: integer
+      - name: predicted_monthly_gmv_usd
+        description: >
+          Estimated monthly GMV if restaurant adopts Owner. Parsed from European
+          decimal format (comma separator). LTV proxy — no transaction-level
+          revenue data available. 8% null.
+        data_type: numeric(12,2)
+      - name: marketplaces_used_cleaned
+        description: >
+          Third-party delivery platforms in use. Python list syntax stripped —
+          returned as comma-separated string (e.g. 'Grubhub, Uber Eats, DoorDash').
+          Null where source was empty list [''] or blank. Exploded in intermediate layer.
+        data_type: varchar
+      - name: olo_tools_cleaned
+        description: >
+          First-party online ordering tools in use. Same cleaning as marketplaces_used.
+          Competitive displacement signal. Exploded in intermediate layer.
+        data_type: varchar
+      - name: cuisine_types_cleaned
+        description: >
+          Restaurant cuisine categories. Same cleaning as marketplaces_used.
+          Exploded in intermediate layer.
+        data_type: varchar
+      - name: form_submission_date
+        description: >
+          Date prospect submitted inbound interest form. 58% null — outbound leads
+          have no form submission. Source had millennium prefix defect corrected
+          via string overlay.
+        data_type: date
+      - name: first_sales_call_at
+        description: Timestamp of first call attempt. 23% null. Key speed-to-contact signal.
+        data_type: timestamp
+      - name: first_text_sent_at
+        description: Timestamp of first text sent. 60% null.
+        data_type: timestamp
+      - name: first_meeting_booked_at
+        description: Timestamp of first meeting booked. 89% null.
+        data_type: timestamp
+      - name: last_sales_call_at
+        description: Timestamp of most recent call. 22% null.
+        data_type: timestamp
+      - name: last_sales_activity_at
+        description: Timestamp of any most recent activity across all channels. 15% null.
+        data_type: timestamp
+      - name: last_sales_email_at
+        description: Timestamp of most recent email. 48% null.
+        data_type: timestamp
