@@ -16,7 +16,7 @@ clean-targets:
 
 seeds:
   owner:
-    +quote_columns: true
+    +quote_columns: false
     leads:
       +column_types:
         LEAD_ID: varchar
@@ -30,7 +30,6 @@ models:
   owner:
     staging:
       +materialized: view
-      +schema: "{{ env_var('DBT_SNOWFLAKE_SCHEMA', 'gtm_case_dev') }}"
     intermediate:
       +materialized: ephemeral
     marts:
