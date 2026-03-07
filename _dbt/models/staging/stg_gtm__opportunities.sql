@@ -3,20 +3,29 @@
 -- source: gtm_case.opportunities
 --
 -- data quality notes:
+--   - 4 opportunity_ids are exact duplicates in source (salesforce export artifact)
+--     deduplicated via distinct * before cleaning — no data loss, rows are byte-for-byte identical
 --   - close_date and demo_set_date have a millennium prefix defect ('0024-...' not '2024-...')
---     corrected below via string replacement before casting
---   - created_date, demo_time, last_sales_call_date_time are clean (no defect)
+--     corrected via fix_millennium_date macro (same defect as leads.form_submission_date)
+--   - created_date, demo_time, last_sales_call_date_time are clean — no defect
 --   - lost_reason_c is null on 4 closed lost rows — passed through as null, flagged in audit
---   - how_did_you_hear_about_us_c is 76% null — sparse but directionally useful
+--   - how_did_you_hear_about_us_c is 76% null — sparse but directionally useful where populated
 
 {{
     config(
+        materialized='view',
         contract={"enforced": true}
     )
 }}
 
 with source as (
     select * from {{ source('gtm_case', 'opportunities') }}
+),
+
+deduplicated as (
+    -- 4 opportunity_ids are perfect duplicates in the source export
+    -- distinct * is safe here — rows are identical on every field
+    select distinct * from source
 ),
 
 cleaned as (
@@ -46,29 +55,21 @@ cleaned as (
         -- demo
         demo_held::boolean                                              as demo_held,
 
-        -- dates: created_date and demo_time are clean
-    created_date::timestamp                                             as created_at,
-    demo_time::timestamp                                                as demo_scheduled_at,
+        -- clean timestamps: no defect on these fields
+        created_date::timestamp                                         as created_at,
+        demo_time::timestamp                                            as demo_scheduled_at,
         last_sales_call_date_time::timestamp                            as last_sales_call_at,
 
-        -- dates: close_date and demo_set_date have millennium prefix defect
-        -- '0024-07-19' → '2024-07-19' via replacing leading '00' with '20'
-        case
-            when demo_set_date::varchar not in ('', '001-01-01')
-            then overlay(demo_set_date::varchar placing '20' from 1 for 2)::date
-        end                                                             as demo_set_date,
+        -- defective dates: millennium prefix corrected via shared macro
+        {{ fix_millennium_date('demo_set_date') }}                      as demo_set_date,
+        {{ fix_millennium_date('close_date') }}                         as close_date
 
-        case
-            when close_date::varchar not in ('', '0001-01-01')
-            then overlay(close_date::varchar placing '20' from 1 for 2)::date
-        end                                                             as close_date
-
-    from source
+    from deduplicated
 ),
 
 final as (
     select
-        {{ dbt_utils.generate_surrogate_key(['opportunity_id']) }}  as opportunity_sk,
+        {{ dbt_utils.generate_surrogate_key(['opportunity_id']) }}      as opportunity_sk,
         opportunity_id,
         account_id,
         stage_name,
