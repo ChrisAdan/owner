@@ -6,26 +6,27 @@
 --   - lead month is channel-aware:
 --       inbound  → date_trunc('month', form_submission_date)
 --       outbound → date_trunc('month', first_sales_call_at)
---     rationale: these are the earliest reliable timestamps per channel that mark
---     when a lead entered the funnel. using a consistent start event per channel
---     avoids mixing inbound form dates with outbound call dates in the same field.
+--     rationale: earliest reliable timestamp per channel marking funnel entry.
 --   - demo_set counted from opportunity.demo_set_date being non-null
 --   - demo_held counted from opportunity.demo_held = true
---   - closed_won and closed_lost counted from opportunity.stage_name
---   - all rates computed via dbt_utils.safe_divide to handle zero-denominator months
---     (early months and outbound pre-2024 have very low volumes)
+--   - all rates use safe_divide to handle zero denominators in low-volume months
 --
 -- trade-offs:
---   - lead month attribution uses lead entry date, not close date. a lead created in
---     jan that closes in mar is counted in jan. this is a cohort view, not a
---     period-activity view. appropriate for pipeline efficiency analysis.
---   - expense data only covers jan–jun 2024. cac calculation joining this model
---     to int_expenses__by_channel_month will naturally limit to that window.
---   - jul 2024 data is partial — downstream consumers should filter or flag accordingly.
+--   - cohort view: leads attributed to entry month, not close month.
+--   - expense data only covers jan–jun 2024 — cac calculations joining this model
+--     to int_expenses__by_channel_month are naturally scoped to that window.
+--   - jul 2024 data is partial.
+--
+-- type notes:
+--   - count() returns bigint in postgres — leads_created et al. declared bigint.
+--   - safe_divide(bigint::numeric, bigint::numeric) returns numeric (unspecified).
+--     rate columns cast to numeric(6,4) here — point of introduction — so
+--     downstream marts inherit the correct precision without recasting.
 
 {{
     config(
-        materialized='ephemeral'
+        materialized='view',
+        contract={"enforced": true}
     )
 }}
 
@@ -36,7 +37,6 @@ with enriched as (
 with_month as (
     select
         *,
-        -- channel-aware lead month derivation
         case
             when channel = 'inbound'
             then date_trunc('month', form_submission_date::timestamp)::date
@@ -44,7 +44,6 @@ with_month as (
         end                                                             as lead_month
     from enriched
     where
-        -- exclude leads with no anchor timestamp (ungroupable)
         (channel = 'inbound' and form_submission_date is not null)
         or (channel = 'outbound' and first_sales_call_at is not null)
 ),
@@ -73,12 +72,23 @@ final as (
         closed_won,
         closed_lost,
 
-        -- conversion rates — safe_divide guards against zero denominators
-        -- in low-volume months (early history, sparse outbound pre-2024)
-        {{ dbt_utils.safe_divide('demos_set', 'leads_created') }}           as lead_to_demo_set_rate,
-        {{ dbt_utils.safe_divide('demos_held', 'demos_set') }}              as demo_set_to_held_rate,
-        {{ dbt_utils.safe_divide('closed_won', 'demos_held') }}             as demo_to_close_rate,
-        {{ dbt_utils.safe_divide('closed_won', 'leads_created') }}          as overall_conversion_rate
+        -- type notes:
+        --   - count() returns bigint in postgres — leads_created et al. declared bigint.
+        --   - safe_divide expands to: (numerator) / nullif((denominator), 0)
+        --     without outer parens, ::numeric(N,M) binds to the denominator nullif(),
+        --     not the division result — casting a large denominator (e.g. leads_created=1388)
+        --     into numeric(6,4) causes overflow. outer parens required:
+        --     ( safe_divide(...) )::numeric(6,4)
+        ({{ dbt_utils.safe_divide('demos_set::numeric', 'leads_created::numeric') }})::numeric(6,4)
+                                                                        as lead_to_demo_set_rate,
+                                                                        -- add precision to allow ratios > 1
+                                                                        -- possible for demos booked and held between months
+        ({{ dbt_utils.safe_divide('demos_held::numeric', 'demos_set::numeric') }})::numeric(8,4)
+                                                                        as demo_set_to_held_rate,
+        ({{ dbt_utils.safe_divide('closed_won::numeric', 'demos_held::numeric') }})::numeric(6,4)
+                                                                        as demo_to_close_rate,
+        ({{ dbt_utils.safe_divide('closed_won::numeric', 'leads_created::numeric') }})::numeric(6,4)
+                                                                        as overall_conversion_rate
 
     from aggregated
 )

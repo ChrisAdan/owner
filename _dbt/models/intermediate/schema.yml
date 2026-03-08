@@ -21,33 +21,43 @@ models:
         - 6 months of data (Jan–Jun 2024) limits trend analysis. Conclusions
           should be treated as directional rather than statistically definitive.
     config:
-      materialized: ephemeral
+      materialized: view
+      contract:
+        enforced: true
     columns:
       - name: expense_channel_month_sk
         description: "{{ doc('surrogate_key') }} Natural key: month_date + channel."
         data_type: varchar
+        tests:
+          - not_null
+          - unique
       - name: month_date
         description: First day of the calendar month. Parsed from Mon-YY source format.
         data_type: date
+        tests:
+          - not_null
       - name: channel
         description: "{{ doc('sales_channel') }}"
         data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
       - name: salary_and_commissions_usd
-        description: >
-          Total salary and commission cost for this channel and month.
-          Source: stg_gtm__expenses_salary_and_commissions.
-        data_type: numeric
+        description: Total salary and commission cost for this channel and month.
+        data_type: numeric(12,2)
       - name: advertising_spend_usd
         description: >
-          Paid advertising spend attributed to this channel and month.
-          Non-zero for inbound only — outbound has no ad spend and receives 0.
-          Source: stg_gtm__expenses_advertising.
-        data_type: numeric
+          Paid advertising spend for this channel and month.
+          Non-zero for inbound only — outbound receives 0.
+        data_type: numeric(12,2)
       - name: total_cost_usd
         description: >
-          Total channel cost for the month. Sum of salary_and_commissions_usd
-          and advertising_spend_usd. Use as CAC denominator in mart_cac_ltv.
-        data_type: numeric
+          Total channel cost for the month. Sum of salary and advertising.
+          Cast to numeric(12,2) at point of introduction — addition of two
+          numeric(12,2) values produces numeric(13,2) in postgres without cast.
+        data_type: numeric(12,2)
 
   - name: int_leads__enriched
     description: >
@@ -59,17 +69,24 @@ models:
       paid advertising; outbound leads were BDR-sourced cold contacts.
 
       Introduces two key derived metrics: speed_to_first_contact_hours (inbound only)
-      and days_in_funnel (channel-aware start point). These are the primary leading
-      indicator inputs for mart_leading_indicators.
+      and days_in_funnel (channel-aware start point). Both cast to their final numeric
+      types at introduction — extract(epoch from interval) returns float8 in postgres.
     config:
-      materialized: ephemeral
+      materialized: view
+      contract:
+        enforced: true
     columns:
       - name: lead_sk
         description: "{{ doc('surrogate_key') }} Natural key: lead_id."
         data_type: varchar
+        tests:
+          - not_null
+          - unique
       - name: lead_id
         description: Salesforce lead identifier. Source primary key from stg_gtm__leads.
         data_type: varchar
+        tests:
+          - not_null
       - name: converted_opportunity_id
         description: Foreign key to opportunities. Null for unconverted leads (90%).
         data_type: varchar
@@ -82,6 +99,11 @@ models:
       - name: channel
         description: "{{ doc('channel_derived') }}"
         data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
       - name: stage_name
         description: Current opportunity funnel stage. Null for unconverted leads.
         data_type: varchar
@@ -119,26 +141,26 @@ models:
         description: True if lead is in a terminal non-converting status.
         data_type: boolean
       - name: sales_call_count
-        description: Total calls made to this lead.
+        description: Total calls made to this lead. 21% null.
         data_type: integer
       - name: sales_text_count
-        description: Total texts sent to this lead.
+        description: Total texts sent to this lead. 52% null.
         data_type: integer
       - name: sales_email_count
-        description: Total emails sent to this lead.
+        description: Total emails sent to this lead. 48% null.
         data_type: integer
       - name: total_activity_count
-        description: Sum of calls, texts, and emails.
+        description: "{{ doc('total_activity_count') }}"
         data_type: integer
       - name: connected_with_decision_maker
         description: Whether SDR reached a decision maker.
         data_type: boolean
       - name: location_count
-        description: Number of restaurant locations.
+        description: Number of restaurant locations. 4% null.
         data_type: integer
       - name: predicted_monthly_gmv_usd
-        description: Estimated monthly GMV if restaurant adopts Owner. LTV proxy.
-        data_type: numeric
+        description: "{{ doc('predicted_monthly_gmv_usd') }}"
+        data_type: numeric(12,2)
       - name: marketplaces_used_cleaned
         description: Cleaned comma-separated third-party delivery platforms.
         data_type: varchar
@@ -152,22 +174,22 @@ models:
         description: Inbound form submission date. Null for outbound leads.
         data_type: date
       - name: first_sales_call_at
-        description: Timestamp of first sales call.
+        description: Timestamp of first sales call. 23% null.
         data_type: timestamp
       - name: first_text_sent_at
-        description: Timestamp of first text sent.
+        description: Timestamp of first text sent. 60% null.
         data_type: timestamp
       - name: first_meeting_booked_at
-        description: Timestamp of first meeting booked.
+        description: Timestamp of first meeting booked. 89% null.
         data_type: timestamp
       - name: last_sales_call_at
         description: Timestamp of most recent call from leads.
         data_type: timestamp
       - name: last_sales_activity_at
-        description: Timestamp of most recent activity across all channels.
+        description: Timestamp of most recent activity across all channels. 15% null.
         data_type: timestamp
       - name: last_sales_email_at
-        description: Timestamp of most recent email.
+        description: Timestamp of most recent email. 48% null.
         data_type: timestamp
       - name: opportunity_created_at
         description: Timestamp opportunity was created in Salesforce.
@@ -180,10 +202,10 @@ models:
         data_type: timestamp
       - name: speed_to_first_contact_hours
         description: "{{ doc('speed_to_first_contact_hours') }}"
-        data_type: numeric
+        data_type: numeric(10,2)
       - name: days_in_funnel
         description: "{{ doc('days_in_funnel') }}"
-        data_type: numeric
+        data_type: numeric(8,2)
 
   - name: int_funnel__conversion_rates
     description: >
@@ -194,29 +216,43 @@ models:
       outbound uses first_sales_call_at. This is a cohort view — leads are attributed
       to the month they entered the funnel, not the month they closed.
 
-      All rates use dbt_utils.safe_divide to handle zero denominators in low-volume
-      months (early history 2020–2022, sparse outbound pre-2024).
+      All rates cast to numeric(6,4) at point of introduction. safe_divide on
+      bigint::numeric operands returns unspecified numeric precision in postgres.
 
       Note: expense data covers Jan–Jun 2024 only. CAC calculations joining this
       model to int_expenses__by_channel_month are naturally scoped to that window.
       Jul 2024 data is partial and should be flagged in downstream consumers.
     config:
-      materialized: ephemeral
+      materialized: view
+      contract:
+        enforced: true
     columns:
       - name: funnel_channel_month_sk
         description: "{{ doc('surrogate_key') }} Natural key: month_date + channel."
         data_type: varchar
+        tests:
+          - not_null
+          - unique
       - name: month_date
         description: >
           First day of the calendar month. Channel-aware: inbound uses
           form_submission_date, outbound uses first_sales_call_at.
         data_type: date
+        tests:
+          - not_null
       - name: channel
         description: "{{ doc('channel_derived') }}"
         data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
       - name: leads_created
         description: Total leads entering the funnel this month for this channel.
         data_type: bigint
+        tests:
+          - not_null
       - name: demos_set
         description: Leads that progressed to a scheduled demo (demo_set_date non-null).
         data_type: bigint
@@ -230,17 +266,17 @@ models:
         description: Leads that reached closed lost stage.
         data_type: bigint
       - name: lead_to_demo_set_rate
-        description: Conversion rate from lead creation to demo scheduled. demos_set / leads_created.
-        data_type: numeric
+        description: demos_set / leads_created. Cast to numeric(6,4) at introduction.
+        data_type: numeric(6,4)
       - name: demo_set_to_held_rate
-        description: Show rate — proportion of scheduled demos that were actually held. demos_held / demos_set.
-        data_type: numeric
+        description: demos_held / demos_set. Show rate. Cast to numeric(8,4) at introduction.
+        data_type: numeric(8,4)
       - name: demo_to_close_rate
-        description: Close rate from held demo to closed won. closed_won / demos_held.
-        data_type: numeric
+        description: closed_won / demos_held. Cast to numeric(6,4) at introduction.
+        data_type: numeric(6,4)
       - name: overall_conversion_rate
-        description: End-to-end funnel conversion rate. closed_won / leads_created.
-        data_type: numeric
+        description: closed_won / leads_created. Cast to numeric(6,4) at introduction.
+        data_type: numeric(6,4)
 
   - name: int_restaurant__profile
     description: >
@@ -248,21 +284,30 @@ models:
       Grain is lead not account: account_id only appears on converted leads via opportunities,
       so using lead grain preserves the full prospect universe.
 
-      Marketplace count and OLO tool flag are derived from cleaned array fields.
-      estimated_annual_ltv_usd is a proxy based on Owner's pricing model
-      ($500/mo subscription + 5% take rate on predicted GMV) — not observed revenue.
+      Marketplace count and OLO tool flag derived from cleaned array fields.
+      estimated_annual_ltv_usd cast to numeric(12,2) at introduction —
+      round() returns unspecified numeric precision in postgres.
     config:
-      materialized: ephemeral
+      materialized: view
+      contract:
+        enforced: true
     columns:
       - name: lead_sk
         description: "{{ doc('surrogate_key') }} Natural key: lead_sk from int_leads__enriched."
         data_type: varchar
+        tests:
+          - not_null
+          - unique
       - name: lead_id
         description: Salesforce lead identifier.
         data_type: varchar
+        tests:
+          - not_null
       - name: channel
         description: "{{ doc('channel_derived') }}"
         data_type: varchar
+        tests:
+          - not_null
       - name: is_converted
         description: True if lead converted to an opportunity.
         data_type: boolean
@@ -270,7 +315,7 @@ models:
         description: True if associated opportunity reached Closed Won. Null for unconverted leads.
         data_type: boolean
       - name: location_count
-        description: Number of restaurant locations for this lead.
+        description: Number of restaurant locations for this lead. 4% null.
         data_type: integer
       - name: cuisine_types_cleaned
         description: Cleaned comma-separated cuisine categories.
@@ -283,7 +328,7 @@ models:
         data_type: boolean
       - name: predicted_monthly_gmv_usd
         description: "{{ doc('predicted_monthly_gmv_usd') }}"
-        data_type: numeric
+        data_type: numeric(12,2)
       - name: estimated_annual_ltv_usd
         description: "{{ doc('estimated_annual_ltv_usd') }}"
-        data_type: numeric
+        data_type: numeric(12,2)

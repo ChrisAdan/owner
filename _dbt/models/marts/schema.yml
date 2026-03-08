@@ -1,0 +1,225 @@
+version: 2
+
+models:
+  - name: mart_cac_ltv
+    description: >
+      One row per sales channel per calendar month, scoped to Jan–Jun 2024
+      (the expense data window). Combines funnel conversion counts with cost
+      data to produce CAC, and LTV estimates from won leads in the same cohort.
+
+      Inner join to expenses naturally limits output to months where cost data
+      exists. Full funnel history without cost context is in mart_gtm_funnel.
+
+      CAC/LTV ratio benchmarks: >3 indicates healthy unit economics for
+      subscription/SaaS businesses. Values below 1 indicate the cost of
+      acquisition exceeds the estimated lifetime value.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: cac_ltv_sk
+        description: "{{ doc('surrogate_key') }} Natural key: month_date + channel."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: month_date
+        description: First day of the calendar month. Scoped to Jan–Jun 2024.
+        data_type: date
+        tests:
+          - not_null
+      - name: channel
+        description: "{{ doc('channel_derived') }}"
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
+      - name: total_cost_usd
+        description: Total channel cost for the month — salary, commissions, and advertising (inbound only).
+        data_type: numeric(12,2)
+      - name: new_customers_won
+        description: Closed won opportunities cohort-attributed to this channel and month.
+        data_type: bigint
+      - name: cac_usd
+        description: >
+          Customer acquisition cost. total_cost_usd / new_customers_won.
+          Null where new_customers_won = 0.
+        data_type: numeric(12,2)
+      - name: avg_predicted_monthly_gmv_usd
+        description: "{{ doc('predicted_monthly_gmv_usd') }} Average across won leads in this cohort month."
+        data_type: numeric(12,2)
+      - name: avg_estimated_ltv_usd
+        description: "{{ doc('estimated_annual_ltv_usd') }} Average across won leads in this cohort month."
+        data_type: numeric(12,2)
+      - name: cac_ltv_ratio
+        description: >
+          avg_estimated_ltv_usd / cac_usd. Measures return on acquisition spend.
+          Null where cac_usd is null or zero.
+        data_type: numeric(8,4)
+
+  - name: mart_gtm_funnel
+    description: >
+      One row per sales channel per calendar month. Full funnel history from
+      2020 onward, though outbound only appears meaningfully from Dec 2023.
+      Combines funnel conversion counts and rates with average engagement
+      timing metrics for leads in each cohort.
+
+      Speed and days_in_funnel averages are scoped to converted leads —
+      measuring the path that worked. Activity count averages include all leads
+      as a baseline engagement signal.
+
+      Filter to 2024 for channel comparison analysis — earlier months are
+      inbound-only and low volume.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: gtm_funnel_sk
+        description: "{{ doc('surrogate_key') }} Natural key: month_date + channel."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: month_date
+        description: >
+          First day of the calendar month. Channel-aware attribution:
+          inbound uses form_submission_date, outbound uses first_sales_call_at.
+        data_type: date
+        tests:
+          - not_null
+      - name: channel
+        description: "{{ doc('channel_derived') }}"
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
+      - name: leads_created
+        description: Total leads entering the funnel this month for this channel.
+        data_type: bigint
+      - name: demos_set
+        description: Leads that progressed to a scheduled demo.
+        data_type: bigint
+      - name: demos_held
+        description: Leads where a demo was actually conducted.
+        data_type: bigint
+      - name: closed_won
+        description: Leads that converted to a closed won opportunity.
+        data_type: bigint
+      - name: closed_lost
+        description: Leads that reached closed lost stage.
+        data_type: bigint
+      - name: lead_to_demo_set_rate
+        description: demos_set / leads_created. Null-safe.
+        data_type: numeric(6,4)
+      - name: demo_set_to_held_rate
+        description: demos_held / demos_set. Show rate. Null-safe.
+        data_type: numeric(8,4)
+      - name: demo_to_close_rate
+        description: closed_won / demos_held. Null-safe.
+        data_type: numeric(6,4)
+      - name: overall_conversion_rate
+        description: closed_won / leads_created. End-to-end funnel efficiency. Null-safe.
+        data_type: numeric(6,4)
+      - name: avg_speed_to_first_contact_hours
+        description: "{{ doc('speed_to_first_contact_hours') }} Average across converted inbound leads in cohort."
+        data_type: numeric(10,2)
+      - name: avg_days_in_funnel
+        description: "{{ doc('days_in_funnel') }} Average across converted leads in cohort."
+        data_type: numeric(8,2)
+      - name: avg_activity_count
+        description: "{{ doc('total_activity_count') }} Average across all leads in cohort."
+        data_type: numeric(8,2)
+
+  - name: mart_leading_indicators
+    description: >
+      One row per lead. Scores the full prospect universe with engagement signals
+      and a rule-based conversion probability tier (hot / warm / cold).
+
+      Tier thresholds are derived from observed conversion rates in this dataset:
+        hot:  connected_with_decision_maker = true → 24–41% conversion (10x lift)
+        warm: active engagement + fast inbound response (≤72h) or high GMV (>$6,279/mo)
+        cold: all remaining leads
+
+      activity_density_score normalizes total touches by days in funnel,
+      providing an engagement intensity signal independent of funnel duration.
+
+      Intended for SDR/BDR queue prioritization and prospect targeting analysis.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: lead_sk
+        description: "{{ doc('surrogate_key') }} Natural key: lead_id."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: lead_id
+        description: Salesforce lead identifier.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: channel
+        description: "{{ doc('channel_derived') }}"
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inbound", "outbound"]
+      - name: status
+        description: Lead lifecycle status from staging.
+        data_type: varchar
+      - name: is_converted
+        description: True if lead converted to an opportunity.
+        data_type: boolean
+      - name: is_disqualified
+        description: True if lead is in a terminal non-converting status.
+        data_type: boolean
+      - name: connected_with_decision_maker
+        description: Whether SDR/BDR reached a decision maker. Primary tier signal.
+        data_type: boolean
+      - name: speed_to_first_contact_hours
+        description: "{{ doc('speed_to_first_contact_hours') }}"
+        data_type: numeric(10,2)
+      - name: days_in_funnel
+        description: "{{ doc('days_in_funnel') }}"
+        data_type: numeric(8,2)
+      - name: total_activity_count
+        description: "{{ doc('total_activity_count') }}"
+        data_type: integer
+      - name: activity_density_score
+        description: >
+          total_activity_count / greatest(days_in_funnel, 1). Engagement intensity
+          normalized by time in funnel. Null where days_in_funnel is not computable.
+          Use for ranking within cohorts, not as a standalone threshold.
+        data_type: numeric(8,4)
+      - name: predicted_monthly_gmv_usd
+        description: "{{ doc('predicted_monthly_gmv_usd') }}"
+        data_type: numeric(12,2)
+      - name: estimated_annual_ltv_usd
+        description: "{{ doc('estimated_annual_ltv_usd') }}"
+        data_type: numeric(12,2)
+      - name: marketplace_count
+        description: "{{ doc('marketplace_count') }}"
+        data_type: integer
+      - name: has_olo_tool
+        description: "{{ doc('has_olo_tool') }}"
+        data_type: boolean
+      - name: conversion_probability_tier
+        description: >
+          Rule-based prospect tier derived from observed conversion rates.
+          hot:  connected_with_decision_maker = true (24–41% observed conversion)
+          warm: activity > 0 AND (speed_to_first_contact_hours ≤ 72 OR predicted_monthly_gmv_usd > 6279)
+          cold: all remaining leads (1–3% observed conversion)
+          Thresholds: speed 72h = converted-lead p75; GMV $6,279 = dataset p75.
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["hot", "warm", "cold"]

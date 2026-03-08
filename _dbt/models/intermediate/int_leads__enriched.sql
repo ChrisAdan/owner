@@ -22,10 +22,16 @@
 --     this understates true funnel duration if BDR outreach preceded the first logged call.
 --   - stage_name and is_won/is_lost pulled from opportunities at current snapshot —
 --     no historical stage progression available in source data.
+--
+-- type notes:
+--   - extract(epoch from interval) returns float8 in postgres.
+--     speed_to_first_contact_hours and days_in_funnel are cast to their final
+--     numeric types here
 
 {{
     config(
-        materialized='ephemeral'
+        materialized='view',
+        contract={"enforced": true}
     )
 }}
 
@@ -65,7 +71,7 @@ joined as (
         l.is_converted,
         l.is_disqualified,
 
-        -- engagement activity
+        -- engagement activity (integer types from staging, passed through unchanged)
         l.sales_call_count,
         l.sales_text_count,
         l.sales_email_count,
@@ -79,7 +85,7 @@ joined as (
         l.olo_tools_cleaned,
         l.cuisine_types_cleaned,
 
-        -- timing fields
+        -- timing fields passed through from staging (already typed correctly)
         l.form_submission_date,
         l.first_sales_call_at,
         l.first_text_sent_at,
@@ -91,20 +97,26 @@ joined as (
         o.demo_scheduled_at,
         o.last_sales_call_at                                                    as opp_last_sales_call_at,
 
-        -- speed to first contact (inbound only)
-        -- rationale: only meaningful when there is a defined inbound event to respond to
+        -- speed to first contact: inbound only
+        -- hours_between returns float8 via extract(epoch); cast to final type here
         case
             when l.form_submission_date is not null
-            then {{ hours_between('l.form_submission_date::timestamp', 'l.first_sales_call_at') }}
+            then (
+                {{ hours_between('l.form_submission_date::timestamp', 'l.first_sales_call_at') }}
+            )::numeric(10,2)
         end                                                                     as speed_to_first_contact_hours,
 
-        -- days in funnel: channel-aware start point
-        -- inbound:  form submission → last activity
-        -- outbound: first call → last activity (best available proxy, see trade-offs)
+        -- days in funnel: channel-aware, float8 cast to final type here
         case
             when l.form_submission_date is not null
-            then {{ hours_between('l.form_submission_date::timestamp', 'l.last_sales_activity_at') }} / 24.0
-            else {{ hours_between('l.first_sales_call_at', 'l.last_sales_activity_at') }} / 24.0
+            then (
+                {{ hours_between('l.form_submission_date::timestamp', 'l.last_sales_activity_at') }}
+                / 24.0
+            )::numeric(8,2)
+            else (
+                {{ hours_between('l.first_sales_call_at', 'l.last_sales_activity_at') }}
+                / 24.0
+            )::numeric(8,2)
         end                                                                     as days_in_funnel
 
     from leads l
