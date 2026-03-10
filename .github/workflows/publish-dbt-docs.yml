@@ -9,63 +9,78 @@ jobs:
     permissions:
       contents: write
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    defaults:
+      run:
+        working-directory: _dbt
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ${{ secrets.DBT_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.DBT_POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.DBT_POSTGRES_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dbt
+      - name: Install dependencies
         run: pip install dbt-core dbt-postgres
-
-      - name: Install dbt packages
-        working-directory: _dbt
-        run: dbt deps
+        working-directory: .
 
       - name: Write profiles.yml
         run: |
           mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << 'EOF'
+          cat << EOF > ~/.dbt/profiles.yml
           owner:
             target: docs
             outputs:
               docs:
                 type: postgres
-                host: ${{ secrets.DOCS_PG_HOST }}
+                host: localhost
+                user: ${{ secrets.DBT_POSTGRES_USER }}
+                password: ${{ secrets.DBT_POSTGRES_PASSWORD }}
                 port: 5432
-                user: ${{ secrets.DOCS_PG_USER }}
-                password: ${{ secrets.DOCS_PG_PASSWORD }}
-                dbname: ${{ secrets.DOCS_PG_DBNAME }}
-                schema: gtm_case_docs
+                dbname: ${{ secrets.DBT_POSTGRES_DB }}
+                schema: gtm_case_dev
                 threads: 4
           EOF
+        working-directory: .
 
-      - name: Seed source data
-        working-directory: _dbt
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt seed
         run: dbt seed
 
-      - name: Build models
-        working-directory: _dbt
+      - name: dbt build
         run: dbt build --full-refresh --exclude resource_type:seed
 
-      - name: Generate docs
-        working-directory: _dbt
+      - name: dbt docs generate
         run: dbt docs generate
 
       - name: Assemble GitHub Pages artifact
         run: |
-          mkdir -p gh-pages
-          cp _dbt/target/index.html gh-pages/
-          cp _dbt/target/catalog.json gh-pages/
-          cp _dbt/target/manifest.json gh-pages/
+          mkdir -p ../gh-pages
+          cp target/index.html ../gh-pages/
+          cp target/catalog.json ../gh-pages/
+          cp target/manifest.json ../gh-pages/
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: gh-pages
+          publish_dir: _dbt/../gh-pages
           publish_branch: gh-pages
           force_orphan: true
