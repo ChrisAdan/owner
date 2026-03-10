@@ -23,15 +23,23 @@ seeds:
         SALES_EMAIL_COUNT: varchar
         LOCATION_COUNT: varchar
         PREDICTED_SALES_WITH_OWNER: varchar
+    +docs:
+      node_color: "#8B6914" # warm brown — raw proxy data, distinct from sources
 
 models:
   owner:
     staging:
       +materialized: view
+      +docs:
+        node_color: "#2E86AB" # steel blue — cleaned/typed, first trustworthy layer
     intermediate:
       +materialized: view
+      +docs:
+        node_color: "#A23B72" # plum — enriched/joined, middle tier
     marts:
       +materialized: table
+      +docs:
+        node_color: "#F18F01" # amber — business grain, consumption layer
 
 on-run-end:
   - "{{ log('Run completed: ' ~ run_started_at, info=true) }}"
