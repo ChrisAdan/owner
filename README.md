@@ -23,11 +23,11 @@ Analyses use `{{ ref() }}` and compile via `dbt compile --select <analysis_name>
 
 ### Layer responsibilities
 
-**Staging** — raw → typed. Every field cast to its final type here. Source issues resolved: millennium date defect, European numeric format, stringified Python lists, 4 duplicate opportunities. All staging models are views with contract enforcement.
+**Staging** — raw → typed. Every field cast to its final type here. Source issues resolved: millennium date defect, European numeric format, stringified Python lists, 4 duplicate opportunities. Each source table has a companion audit model (`stg_gtm__*__audit`) that surfaces data quality findings as a dead letter queue without blocking the main model. All staging models are views with contract enforcement.
 
-**Intermediate** — typed → enriched. Joins, channel derivation, funnel aggregation, LTV estimation. All intermediate models are views with contract enforcement. Types are cast on initialization for downstream propagation. See type notes in each model for specifics.
+**Intermediate** — typed → enriched. Joins, channel derivation, funnel aggregation, LTV estimation, and audit rollup to calendar month. All intermediate models are views with contract enforcement. Types are cast on initialization for downstream propagation. See type notes in each model for specifics.
 
-**Marts** — enriched → business grain. Three incremental models (`delete+insert`), each contract-enforced with explicit numeric precision on every column. Lookback window controlled by `var('incremental_lookback_months')` (default: 2). All columns cast explicitly in the `final` CTE to match contract-declared types — required for Postgres, where `on_schema_change='fail'` treats `text` vs `varchar` and `numeric` vs `numeric(p,s)` as mismatches.
+**Marts** — enriched → business grain. Four models: three incremental (`delete+insert`) and one table-materialized. Each is contract-enforced with explicit numeric precision on every column. Lookback window for incrementals controlled by `var('incremental_lookback_months')` (default: 2). All columns cast explicitly in the `final` CTE to match contract-declared types — required for Postgres, where `on_schema_change='fail'` treats `text` vs `varchar` and `numeric` vs `numeric(p,s)` as mismatches.
 
 ---
 
@@ -85,18 +85,31 @@ Tier thresholds are data-derived: speed 72h = converted-lead p75; GMV $6,279 = d
 
 Incremental: watermark on `last_sales_activity_at`. Any lead touched since the last run reprocesses — catches status changes (e.g. `working` → `disqualified`) as well as new activity. Watermark resolved in a separate `watermark` CTE joined via `cross join` to satisfy Postgres's restriction on aggregates in WHERE clauses.
 
+### `mart_data_quality_monitor`
+
+One row per calendar month, scoped to Jan–Jun 2024. Joins estimated revenue (`new_customers_won × avg_estimated_ltv_usd` from `mart_cac_ltv`) with monthly audit finding counts and density metrics rolled up from both source tables via `int_audit__by_month`.
+
+**Key modeling decisions:**
+
+- Revenue proxy is estimated annual LTV attributed to cohort-month won leads — directional signal only, consistent with `mart_cac_ltv`. Not realized revenue.
+- Audit findings attributed to their source record's calendar anchor: `form_submission_date` for leads, `created_at` for opportunities.
+- `overall_audit_density` = affected records / total records in scope. Provides a normalized bad-data rate independent of volume changes.
+- MoM delta columns (`mom_revenue_change_usd`, `mom_audit_findings_change`) computed via `lag()`. Null for the first month in the window.
+- Depends on `mart_cac_ltv` — mart-to-mart reference, intentional. The expense window scoping already lives in `mart_cac_ltv`; duplicating it here would create drift risk.
+
 ---
 
 ## Source Data Quality Notes
 
-| Issue                    | Detail                                                                                    | Resolution                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Millennium date defect   | `FORM_SUBMISSION_DATE`, `CLOSE_DATE`, `DEMO_SET_DATE` stored as `0024-xx-xx`              | `fix_millennium_date` macro corrects at staging                                                                          |
-| European numeric format  | Expense and GMV fields use `US$\t`, non-breaking space thousands separator, comma decimal | `parse_european_numeric` macro handles at staging                                                                        |
-| Stringified Python lists | `MARKETPLACES_USED`, `OLO_TOOLS`, `CUISINE_TYPES` stored as `"['doordash', 'grubhub']"`   | `clean_category_list` macro strips brackets/quotes                                                                       |
-| Opportunity duplicates   | 4 exact duplicate rows in opportunities source                                            | `distinct *` in `stg_gtm__opportunities`                                                                                 |
-| Negative speed values    | 26 leads where `first_sales_call_at` precedes `form_submission_date` (up to -968h)        | Surfaced, not filtered. Likely outbound-first leads later reclassified as inbound. Filter `> 0` for conversion analysis. |
-| Stale inbound leads      | 1,319 leads with 2020 form submissions not contacted until 2024 (up to 34,457h)           | Real values, not defects. Apply a recency filter for speed-based analysis.                                               |
+| Issue                    | Detail                                                                                    | Resolution                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Millennium date defect   | `FORM_SUBMISSION_DATE`, `CLOSE_DATE`, `DEMO_SET_DATE` stored as `0024-xx-xx`              | `fix_millennium_date` macro corrects at staging                                                                                   |
+| European numeric format  | Expense and GMV fields use `US$\t`, non-breaking space thousands separator, comma decimal | `parse_european_numeric` macro handles at staging                                                                                 |
+| Stringified Python lists | `MARKETPLACES_USED`, `OLO_TOOLS`, `CUISINE_TYPES` stored as `"['doordash', 'grubhub']"`   | `clean_category_list` macro strips brackets/quotes                                                                                |
+| Opportunity duplicates   | 4 exact duplicate rows in opportunities source                                            | `distinct *` in `stg_gtm__opportunities`                                                                                          |
+| Negative speed values    | 26 leads where `first_sales_call_at` precedes `form_submission_date` (up to -968h)        | Surfaced in audit, not filtered. Likely outbound-first leads later reclassified as inbound. Filter `> 0` for conversion analysis. |
+| Stale inbound leads      | 1,319 leads with 2020 form submissions not contacted until 2024 (up to 34,457h)           | Surfaced in audit, flagged for recency filtering in speed-based analysis.                                                         |
+| Null lost reason         | 4 closed lost opportunities with null `lost_reason_c`                                     | Surfaced in audit, passed through as null in staging.                                                                             |
 
 ---
 
@@ -119,9 +132,9 @@ Set Postgres credentials in `~/.dbt/profiles.yml` under the `dev` target (`gtm_c
 
 ## Switching to Snowflake
 
-Three changes required when targeting Snowflake (`demo_db.gtm_case`):
+Two changes required when targeting Snowflake (`demo_db.gtm_case`):
 
-1. **`profiles.yml`** — point `prod` target at Snowflake. Credentials go in `~/.dbt/profiles.yml`; do not commit them.
+1. **`profiles.yml`** — point the `prod` target at Snowflake. Credentials go in `~/.dbt/profiles.yml`; do not commit them.
 
 2. **`int_restaurant__profile`** — one Postgres-specific function:
 
@@ -132,7 +145,9 @@ Three changes required when targeting Snowflake (`demo_db.gtm_case`):
    array_size(split(col, ','))
    ```
 
-3. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres-specific workarounds for `on_schema_change='fail'` type matching. Snowflake handles `varchar`/`text` equivalence natively and these casts are harmless to leave in place, but they can be removed for cleaner SQL.
+3. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres workarounds for `on_schema_change='fail'` type matching. Snowflake handles these equivalences natively; the casts are harmless to leave in place but can be removed for cleaner SQL.
+
+Staging models already use `{{ source('gtm_case', 'table_name') }}` — no changes needed there. Seeds remain as the local dev proxy; on Snowflake they are bypassed entirely by the source definitions.
 
 ---
 
@@ -148,7 +163,7 @@ dbt docs generate
 dbt docs serve
 ```
 
-> Note: GitHub Pages deployment requires the repository to be public, or a GitHub Pro/Team/Enterprise account. On a free plan with a private repo the deploy step will succeed but the page will not be publishable. Docs can be served locally with dbt docs serve.
+> **Note:** GitHub Pages deployment requires the repository to be public, or a GitHub Pro/Team/Enterprise account. On a free plan with a private repo the deploy step will succeed but the page will not be accessible. Docs can always be served locally with `dbt docs serve`.
 
 ---
 
