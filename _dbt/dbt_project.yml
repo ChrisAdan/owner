@@ -1,0 +1,37 @@
+name: "owner"
+version: "1.0.0"
+profile: "owner"
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  incremental_lookback_months: 2
+
+seeds:
+  owner:
+    +quote_columns: false
+    leads:
+      +column_types:
+        LEAD_ID: varchar
+        SALES_CALL_COUNT: varchar
+        SALES_TEXT_COUNT: varchar
+        SALES_EMAIL_COUNT: varchar
+        LOCATION_COUNT: varchar
+        PREDICTED_SALES_WITH_OWNER: varchar
+
+models:
+  owner:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+
+on-run-end:
+  - "{{ log('Run completed: ' ~ run_started_at, info=true) }}"

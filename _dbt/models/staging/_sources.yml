@@ -1,0 +1,185 @@
+version: 2
+
+# TODO: refactor descriptions into {% docs %} blocks
+
+sources:
+  - name: gtm_case
+    description: >
+      Raw GTM source data exported from Salesforce and internal finance systems.
+      Currently proxied via dbt seeds for local development. Target: Snowflake
+      database `demo_db`, schema `gtm_case` on production.
+    database: owner # TODO: replace with demo_db on Snowflake
+    schema: gtm_case_dev # TODO: replace with gtm_case on Snowflake
+    tables:
+      - name: leads
+        description: >
+          One row per inbound or outbound lead. Contains restaurant firmographic
+          attributes (cuisine, location count, marketplace presence), SDR/AE
+          engagement activity (call/text/email counts and timestamps), and lead
+          lifecycle status. Array-like string fields (marketplaces_used,
+          online_ordering_used, cuisine_types) are raw Salesforce export artifacts
+          and will be parsed in staging. Date fields contain a known export defect
+          (millennium prefix '20' dropped) corrected in staging.
+        columns:
+          - name: lead_id
+            description: Salesforce lead identifier. Primary key.
+            data_type: varchar
+          - name: form_submission_date
+            description: Date prospect submitted interest form. 58% null — outbound leads have no form submission.
+            data_type: date
+          - name: sales_call_count
+            description: Total outbound calls made to this lead. 21% null.
+            data_type: number
+          - name: sales_text_count
+            description: Total texts sent to this lead. 52% null.
+            data_type: number
+          - name: sales_email_count
+            description: Total emails sent to this lead. 47% null.
+            data_type: number
+          - name: first_sales_call_date
+            description: Timestamp of first call attempt. Key leading indicator for speed-to-contact.
+            data_type: timestamp_ntz
+          - name: first_text_sent_date
+            description: Timestamp of first text sent.
+            data_type: timestamp_ntz
+          - name: first_meeting_booked_date
+            description: Timestamp of first meeting booked. 88% null — most leads never reach this stage.
+            data_type: timestamp_ntz
+          - name: last_sales_call_date
+            description: Timestamp of most recent call. Used to identify stalled leads.
+            data_type: timestamp_ntz
+          - name: last_sales_activity_date
+            description: Timestamp of any most recent sales activity across all channels.
+            data_type: timestamp_ntz
+          - name: last_sales_email_date
+            description: Timestamp of most recent email.
+            data_type: timestamp_ntz
+          - name: predicted_sales_with_owner
+            description: >
+              Estimated monthly GMV if restaurant adopts Owner. Raw source is varchar
+              with European decimal format (comma separator) — cast to numeric in staging.
+              LTV proxy given absence of transaction-level revenue data.
+            data_type: varchar
+          - name: marketplaces_used
+            description: >
+              Stringified Python list of third-party delivery platforms the restaurant
+              is active on (e.g. Grubhub, DoorDash). Parsed and exploded into
+              bridge table in intermediate layer.
+            data_type: varchar
+          - name: online_ordering_used
+            description: >
+              Stringified Python list of first-party online ordering tools in use
+              (e.g. Toast, Square, Olo). Competitive displacement signal.
+            data_type: varchar
+          - name: cuisine_types
+            description: Stringified Python list of cuisine categories for the restaurant.
+            data_type: varchar
+          - name: location_count
+            description: Number of locations associated with this restaurant lead.
+            data_type: number
+          - name: connected_with_decision_maker
+            description: Boolean flag indicating whether SDR reached a decision maker.
+            data_type: boolean
+          - name: status
+            description: >
+              Current lead lifecycle status. Known values: New, Working, Demo Set,
+              Sales Nurture, Marketing Nurture, Converted, Disqualified, Not Interested,
+              Incorrect Contact Data, No Longer With Company, No Show, Postpone,
+              Restaurant Confirmed, Nurturing. Note: 'Incorrect_Contact_Data' is a
+              dirty duplicate of 'Incorrect Contact Data' — normalized in staging.
+            data_type: varchar
+          - name: converted_opportunity_id
+            description: >
+              Foreign key to opportunities.opportunity_id. Populated only on
+              converted leads (89% null). Join surface between leads and
+              opportunities funnel.
+            data_type: varchar
+
+      - name: opportunities
+        description: >
+          One row per sales opportunity. Represents a lead that has entered the
+          formal sales process (post-demo-set). Contains funnel stage, demo
+          logistics, attribution source, and closed lost taxonomy. Joins to leads
+          via leads.converted_opportunity_id.
+        columns:
+          - name: opportunity_id
+            description: Salesforce opportunity identifier. Primary key.
+            data_type: varchar
+          - name: stage_name
+            description: >
+              Current funnel stage. Values: Interest, Demo Set, In Progress,
+              Verbal Commitment, On Hold, Closed Won, Closed Lost.
+            data_type: varchar
+          - name: lost_reason_c
+            description: >
+              Reason for closure on lost opportunities. 37% null (includes open
+              and won opps). Key values: No Demo Held, No Decision / Non-Responsive,
+              Lack of Urgency, Price, POS Integration, Bad Fit, Lost to Competitor,
+              Not a Decision Maker.
+            data_type: varchar
+          - name: closed_lost_notes_c
+            description: Free-text AE notes on lost deals. 74% null.
+            data_type: varchar
+          - name: business_issue_c
+            description: Free-text description of the prospect's stated business problem. 74% null.
+            data_type: varchar
+          - name: how_did_you_hear_about_us_c
+            description: >
+              Attribution channel. 75% null but directionally useful where populated.
+              Values: Facebook/IG, Cold call, Media Outlet, Youtube, Google,
+              Restaurant Referral, Word of mouth, Webinar, Other.
+            data_type: varchar
+          - name: created_date
+            description: Timestamp opportunity was created in Salesforce.
+            data_type: timestamp_ntz
+          - name: demo_held
+            description: Boolean. Whether a demo was actually conducted.
+            data_type: boolean
+          - name: demo_set_date
+            description: Date demo was scheduled. 28% null. Contains same millennium prefix defect as leads — corrected in staging.
+            data_type: date
+          - name: demo_time
+            description: Scheduled demo timestamp.
+            data_type: timestamp_ntz
+          - name: close_date
+            description: >
+              Opportunity close date. Populated for all rows but contains millennium
+              prefix defect throughout — corrected in staging.
+            data_type: date
+          - name: last_sales_call_date_time
+            description: Timestamp of most recent AE call on this opportunity.
+            data_type: timestamp_ntz
+          - name: account_id
+            description: Salesforce account identifier. Links opportunity to restaurant account.
+            data_type: varchar
+
+      - name: expenses_advertising
+        description: >
+          Monthly advertising spend totals. 6 rows covering Jan–Jun 2024.
+          Covers paid social and search (Facebook, Google). All columns are raw
+          varchar — European currency formatting (US$ prefix, space thousands
+          separator, comma decimal) parsed to numeric in staging.
+        columns:
+          - name: month
+            description: Month label in Mon-YY format (e.g. Jan-24). Parsed to date in staging.
+            data_type: varchar
+          - name: advertising
+            description: "Total advertising spend for the month. Raw format e.g. 'US$ 55 779,40'."
+            data_type: varchar
+
+      - name: expenses_salary_and_commissions
+        description: >
+          Monthly salary and commission costs split by sales team channel.
+          6 rows covering Jan–Jun 2024. Same European currency formatting as
+          expenses_advertising. Unpivoted from wide (two channel columns) to
+          long (one row per channel per month) in staging.
+        columns:
+          - name: month
+            description: Month label in Mon-YY format. Parsed to date in staging.
+            data_type: varchar
+          - name: outbound_sales_team
+            description: "Total salary and commission cost for outbound (BDR) team. Raw format e.g. 'US$ 38 075,75'."
+            data_type: varchar
+          - name: inbound_sales_team
+            description: "Total salary and commission cost for inbound (SDR) team. Raw format e.g. 'US$ 39 216,00'."
+            data_type: varchar

@@ -1,0 +1,91 @@
+version: 2
+
+macros:
+  - name: fix_millennium_date
+    description: >
+      Corrects a known Salesforce export defect where the millennium prefix is dropped
+      from date values, producing '0024-xx-xx' instead of '2024-xx-xx'. Applies a
+      string overlay replacing the leading '00' with '20' before casting to date.
+      Guards against empty strings and Postgres epoch minimum ('0001-01-01').
+      Used in: stg_gtm__leads (form_submission_date),
+               stg_gtm__opportunities (close_date, demo_set_date).
+    arguments:
+      - name: col
+        type: column reference
+        description: The date column to correct. Must be castable to varchar.
+
+  - name: clean_timestamp
+    description: >
+      Safely casts a column to timestamp by first coercing to varchar, trimming
+      whitespace, and returning null for empty strings. Handles cases where dbt
+      seeds land timestamp columns with unexpected empty string values rather than nulls.
+      Used in: stg_gtm__leads (all timestamp fields).
+    arguments:
+      - name: col
+        type: column reference
+        description: The timestamp column to clean and cast.
+
+  - name: clean_category_list
+    description: >
+      Cleans stringified Python list values exported from Salesforce into a
+      comma-separated string suitable for downstream parsing and explosion into
+      bridge tables. Strips brackets, single quotes, and surrounding whitespace
+      using a single regex pass. Returns null when the result is empty (i.e.
+      source value was an empty list [''] or blank).
+      Used in: stg_gtm__leads (marketplaces_used, online_ordering_used, cuisine_types).
+    arguments:
+      - name: col
+        type: column reference
+        description: >
+          The varchar column containing a stringified Python list
+          e.g. "['Grubhub', 'Uber Eats', 'DoorDash']".
+
+  - name: parse_european_numeric
+    description: >
+      Parses a numeric value formatted with European conventions — comma as decimal
+      separator, space as thousands separator, optional 'US$' currency prefix and
+      tab character. Strips all non-numeric characters except commas, replaces comma
+      with period, and casts to numeric with configurable precision and scale.
+      Returns null for null or empty input.
+      Used in: stg_gtm__leads (predicted_sales_with_owner),
+               stg_gtm__expenses_advertising (advertising),
+               stg_gtm__expenses_salary_and_commissions (outbound_sales_team, inbound_sales_team).
+    arguments:
+      - name: col
+        type: column reference
+        description: The varchar column containing a European-formatted numeric value.
+      - name: precision
+        type: integer
+        description: Total numeric precision. Defaults to 12.
+      - name: scale
+        type: integer
+        description: Decimal scale. Defaults to 2.
+
+  - name: derive_channel
+    description: >
+      Derives the sales channel for a lead from the presence or absence of a form
+      submission date. Inbound leads submitted an interest form via paid advertising
+      (Facebook, Google) and have a non-null form_submission_date. Outbound leads
+      were identified and cold-contacted by the BDR team and have no form submission.
+      Single point of truth for channel logic — if a third channel is introduced,
+      update here only.
+      Used in: int_leads__enriched.
+    arguments:
+      - name: form_submission_date_col
+        type: column reference
+        description: The form_submission_date column to evaluate for nullness.
+
+  - name: hours_between
+    description: >
+      Computes the number of hours between two timestamps as a float.
+      Returns null if either input is null. Uses epoch extraction for
+      cross-adapter compatibility (Postgres and Snowflake both support
+      extract(epoch from interval)).
+      Used in: int_leads__enriched (speed_to_first_contact_hours, days_in_funnel).
+    arguments:
+      - name: start_col
+        type: column reference
+        description: The earlier timestamp.
+      - name: end_col
+        type: column reference
+        description: The later timestamp.

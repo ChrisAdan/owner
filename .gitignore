@@ -205,3 +205,56 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+##########
+.env
+# dbt
+target/
+dbt_packages/
+logs/
+profiles.yml
+.user.yml
+
+*.p8
+*.pub
+
+
+#### from dbt-labs
+# dbt core artifacts
+target/
+dbt_packages/
+dbt_modules/
+logs/
+
+# dbt local user state
+.user.yml
+profiles.yml
+
+# environment / secrets
+.env
+*.p8
+*.pub
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+ERD.md
+test.py
