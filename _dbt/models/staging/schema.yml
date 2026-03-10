@@ -303,11 +303,12 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values:
-                - duplicate_row
-                - millennium_date_defect
-                - missing_lost_reason
-                - missing_attribution
+              arguments:
+                values:
+                  - duplicate_row
+                  - millennium_date_defect
+                  - missing_lost_reason
+                  - missing_attribution
       - name: audit_detail
         description: Human-readable description of the specific finding.
         data_type: varchar
@@ -355,12 +356,13 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values:
-                - millennium_date_defect
-                - dirty_status_value
-                - negative_speed_to_contact
-                - stale_lead
-                - converted_missing_opp
+              arguments:
+                values:
+                  - millennium_date_defect
+                  - dirty_status_value
+                  - negative_speed_to_contact
+                  - stale_lead
+                  - converted_missing_opp
       - name: audit_detail
         description: Human-readable description of the specific finding.
         data_type: varchar
