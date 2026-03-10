@@ -29,6 +29,9 @@
 --     numeric(6,4) (max value 99.9999). numeric(8,4) allows up to 9999.9999.
 --     this is a data characteristic, not a data quality issue — documented here
 --     so downstream consumers understand the metric correctly.
+--   - final cte casts varchar and surrogate key columns explicitly.
+--     postgres infers text for string expressions; on_schema_change='fail' treats
+--     text vs varchar as a type mismatch on incremental runs.
 --
 -- incremental notes:
 --   - strategy: delete+insert on [month_date, channel]
@@ -101,9 +104,9 @@ engagement_by_month as (
 
 final as (
     select
-        {{ dbt_utils.generate_surrogate_key(['f.month_date', 'f.channel']) }}   as gtm_funnel_sk,
+        {{ dbt_utils.generate_surrogate_key(['f.month_date', 'f.channel']) }}::varchar  as gtm_funnel_sk,
         f.month_date,
-        f.channel,
+        f.channel::varchar,
         f.leads_created,
         f.demos_set,
         f.demos_held,

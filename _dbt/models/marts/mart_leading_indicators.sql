@@ -44,6 +44,13 @@
 --     even inside a subquery. watermark is resolved in a CTE before the leads CTE
 --     and joined via cross join to produce a scalar comparison value.
 --   - initial load and schema changes: dbt build --full-refresh
+--
+-- type notes:
+--   - final cte casts all columns to their contract-declared types explicitly.
+--     postgres infers text for string expressions and unparameterized numeric for
+--     decimal expressions; on_schema_change='fail' treats these as type mismatches
+--     on incremental runs. explicit casts at this layer ensure table physical types
+--     match the contract on full-refresh, so subsequent incremental runs pass cleanly.
 
 {{
     config(
@@ -137,23 +144,23 @@ joined as (
 
 final as (
     select
-        lead_sk,
-        lead_id,
-        channel,
-        status,
+        lead_sk::varchar,
+        lead_id::varchar,
+        channel::varchar,
+        status::varchar,
         is_converted,
         is_disqualified,
         connected_with_decision_maker,
-        speed_to_first_contact_hours,
-        days_in_funnel,
+        speed_to_first_contact_hours::numeric(10,2),
+        days_in_funnel::numeric(8,2),
         total_activity_count,
         last_sales_activity_at,
-        activity_density_score,
-        predicted_monthly_gmv_usd,
-        estimated_annual_ltv_usd,
+        activity_density_score::numeric(8,4),
+        predicted_monthly_gmv_usd::numeric(12,2),
+        estimated_annual_ltv_usd::numeric(12,2),
         marketplace_count,
         has_olo_tool,
-        conversion_probability_tier
+        conversion_probability_tier::varchar
     from joined
 )
 

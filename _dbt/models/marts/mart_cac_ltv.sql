@@ -27,6 +27,11 @@
 --     and bigint/bigint = bigint integer division, which overflows in downstream expressions.
 --   - cac_ltv_ratio computed in a separate cte (with_ratio) to avoid nesting safe_divide,
 --     which produces unpredictable type inference in postgres.
+--   - final cte casts all columns to their contract-declared types explicitly.
+--     postgres infers text for string expressions and unparameterized numeric for
+--     decimal expressions; on_schema_change='fail' treats these as type mismatches
+--     on incremental runs. explicit casts at this layer ensure table physical types
+--     match the contract on full-refresh, so subsequent incremental runs pass cleanly.
 --
 -- incremental notes:
 --   - strategy: delete+insert on [month_date, channel]
@@ -143,15 +148,15 @@ with_ratio as (
 
 final as (
     select
-        {{ dbt_utils.generate_surrogate_key(['month_date', 'channel']) }}   as cac_ltv_sk,
+        {{ dbt_utils.generate_surrogate_key(['month_date', 'channel']) }}::varchar  as cac_ltv_sk,
         month_date,
-        channel,
-        total_cost_usd,
+        channel::varchar,
+        total_cost_usd::numeric(12,2),
         new_customers_won,
-        cac_usd,
-        avg_predicted_monthly_gmv_usd,
-        avg_estimated_ltv_usd,
-        cac_ltv_ratio
+        cac_usd::numeric(12,2),
+        avg_predicted_monthly_gmv_usd::numeric(12,2),
+        avg_estimated_ltv_usd::numeric(12,2),
+        cac_ltv_ratio::numeric(8,4)
     from with_ratio
 )
 
