@@ -265,3 +265,107 @@ models:
       - name: last_sales_email_at
         description: Timestamp of most recent email. 48% null.
         data_type: timestamp
+
+  - name: stg_gtm__opportunities__audit
+    description: >
+      Dead letter queue for source data anomalies in opportunities.
+      One row per audit finding — a single opportunity_id may appear in multiple
+      categories. Runs as a companion view alongside stg_gtm__opportunities.
+      Does not filter or block the main staging model.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: audit_sk
+        description: "{{ doc('surrogate_key') }} Natural key: record_key + audit_category."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: source_table
+        description: Source table the finding originates from. Always 'opportunities' for this model.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: record_key
+        description: opportunity_id of the flagged record.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: audit_category
+        description: >
+          Category of data quality finding.
+          duplicate_row: exact duplicate opportunity_ids in source export.
+          millennium_date_defect: close_date or demo_set_date stored as 0024-xx-xx.
+          missing_lost_reason: closed lost stage with null lost_reason_c.
+          missing_attribution: how_did_you_hear_about_us_c is null.
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - duplicate_row
+                - millennium_date_defect
+                - missing_lost_reason
+                - missing_attribution
+      - name: audit_detail
+        description: Human-readable description of the specific finding.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: diagnostic_info
+        description: Raw field values relevant to the finding, for triage.
+        data_type: varchar
+
+  - name: stg_gtm__leads__audit
+    description: >
+      Dead letter queue for source data anomalies in leads.
+      One row per audit finding — a single lead_id may appear in multiple
+      categories. Runs as a companion view alongside stg_gtm__leads.
+      Does not filter or block the main staging model.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: audit_sk
+        description: "{{ doc('surrogate_key') }} Natural key: record_key + audit_category."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: source_table
+        description: Source table the finding originates from. Always 'leads' for this model.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: record_key
+        description: lead_id of the flagged record.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: audit_category
+        description: >
+          Category of data quality finding.
+          millennium_date_defect: form_submission_date stored as 0024-xx-xx.
+          dirty_status_value: status = 'Incorrect_Contact_Data' underscore variant.
+          negative_speed_to_contact: first_sales_call_date precedes form_submission_date.
+          stale_lead: form_submission_date in 2020, first contact not until 2024.
+          converted_missing_opp: is_converted = true but converted_opportunity_id is null.
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - millennium_date_defect
+                - dirty_status_value
+                - negative_speed_to_contact
+                - stale_lead
+                - converted_missing_opp
+      - name: audit_detail
+        description: Human-readable description of the specific finding.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: diagnostic_info
+        description: Raw field values relevant to the finding, for triage.
+        data_type: varchar
