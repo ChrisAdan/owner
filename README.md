@@ -156,7 +156,7 @@ dbt docs serve
 
 Outbound CAC increased 4x over six months while headcount cost grew only 31%. The problem is yield, not cost.
 
-> Verify: [`analyses/july_outbound_completeness`](analyses/july_outbound_completeness.sql) · [`analyses/outbound_funnel_stage_rates`](analyses/outbound_funnel_stage_rates.sql) · [`analyses/outbound_headcount_cost_trend`](analyses/outbound_headcount_cost_trend.sql)
+> Verify: [`analyses/july_outbound_completeness`](_dbt/analyses/july_outbound_completeness.sql) · [`analyses/outbound_funnel_stage_rates`](_dbt/analyses/outbound_funnel_stage_rates.sql) · [`analyses/outbound_headcount_cost_trend`](_dbt/analyses/outbound_headcount_cost_trend.sql)
 
 | Month    | Outbound CAC | Won | CAC:LTV |
 | -------- | ------------ | --- | ------- |
@@ -181,7 +181,7 @@ The dataset does not capture list quality, BDR tenure, or the BizOps enrichment 
 
 The behavioral signals already in the CRM are strongly predictive of conversion. The opportunity is operationalizing them as a real-time SDR/BDR prioritization queue rather than working leads in arrival order.
 
-> Verify: [`analyses/inbound_speed_conversion_buckets`](analyses/inbound_speed_conversion_buckets.sql) · [`analyses/inbound_speed_recency_breakdown`](analyses/inbound_speed_recency_breakdown.sql) · [`analyses/july_outbound_won_detail`](analyses/july_outbound_won_detail.sql)
+> Verify: [`analyses/inbound_speed_conversion_buckets`](_dbt/analyses/inbound_speed_conversion_buckets.sql) · [`analyses/inbound_speed_recency_breakdown`](_dbt/analyses/inbound_speed_recency_breakdown.sql) · [`analyses/july_outbound_won_detail`](_dbt/analyses/july_outbound_won_detail.sql)
 
 **Decision maker contact** is the strongest binary signal: 24.5% conversion when reached vs 2.5% otherwise — a 10x lift. This drives the `hot` tier (9,801 leads, 36% of the prospect universe).
 
