@@ -332,3 +332,73 @@ models:
       - name: estimated_annual_ltv_usd
         description: "{{ doc('estimated_annual_ltv_usd') }}"
         data_type: numeric(12,2)
+
+  - name: int_audit__by_month
+    description: >
+      One row per source_table per audit_category per calendar month.
+      Joins audit findings back to their source record's calendar anchor
+      (leads: form_submission_date, opportunities: created_at) to produce
+      monthly finding counts, affected record counts, and density as a
+      fraction of monthly record volume. Feeds mart_data_quality_monitor.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: audit_month_sk
+        description: "{{ doc('surrogate_key') }} Natural key: month_date + source_table + audit_category."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: month_date
+        description: First day of the calendar month. Derived from source record anchor timestamp.
+        data_type: date
+        tests:
+          - not_null
+      - name: source_table
+        description: Source table the findings originate from — 'leads' or 'opportunities'.
+        data_type: varchar
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["leads", "opportunities"]
+      - name: audit_category
+        description: Data quality finding category. See staging audit models for full definitions.
+        data_type: varchar
+        tests:
+          - not_null
+      - name: finding_count
+        description: Raw count of audit findings for this month, source, and category.
+        data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              name: int_audit_by_month_finding_count_positive
+      - name: affected_records
+        description: Distinct record_keys flagged in this month, source, and category.
+        data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              name: int_audit_by_month_affected_records_positive
+      - name: monthly_record_count
+        description: Total records created this month for the source table. Denominator for pct_of_monthly_total.
+        data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              name: int_audit_by_month_monthly_volume_positive
+      - name: pct_of_monthly_total
+        description: affected_records / monthly_record_count. Audit density signal independent of volume.
+        data_type: numeric(6,4)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+              name: int_audit_by_month_density_bounded
