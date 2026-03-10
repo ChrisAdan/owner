@@ -34,11 +34,11 @@ jobs:
             outputs:
               docs:
                 type: postgres
-                host: ${{ secrets.DOCS_PG_HOST }}
+                host:localhost
+                user: ${{ secrets.DBT_POSTGRES_USER }}
+                password: ${{ secrets.DBT_POSTGRES_PASSWORD }}
                 port: 5432
-                user: ${{ secrets.DOCS_PG_USER }}
-                password: ${{ secrets.DOCS_PG_PASSWORD }}
-                dbname: ${{ secrets.DOCS_PG_DBNAME }}
+                dbname: ${{ secrets.DBT_POSTGRES_DB }}
                 schema: gtm_case_docs
                 threads: 4
           EOF
