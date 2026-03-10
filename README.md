@@ -148,6 +148,8 @@ dbt docs generate
 dbt docs serve
 ```
 
+> Note: GitHub Pages deployment requires the repository to be public, or a GitHub Pro/Team/Enterprise account. On a free plan with a private repo the deploy step will succeed but the page will not be publishable. Docs can be served locally with dbt docs serve.
+
 ---
 
 ## GTM Opportunities
