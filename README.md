@@ -132,16 +132,7 @@ Three changes required when targeting Snowflake (`demo_db.gtm_case`):
    array_size(split(col, ','))
    ```
 
-3. **Staging `from` clauses** — replace seed refs with source refs. `_sources.yml` is already defined pointing at `demo_db.gtm_case`. In each staging model change:
-
-   ```sql
-   -- Postgres (seed proxy)
-   from {{ ref('leads') }}
-   -- Snowflake (source)
-   from {{ source('gtm_case', 'leads') }}
-   ```
-
-4. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres-specific workarounds for `on_schema_change='fail'` type matching. Snowflake handles `varchar`/`text` equivalence natively and these casts are harmless to leave in place, but they can be removed for cleaner SQL.
+3. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres-specific workarounds for `on_schema_change='fail'` type matching. Snowflake handles `varchar`/`text` equivalence natively and these casts are harmless to leave in place, but they can be removed for cleaner SQL.
 
 ---
 
