@@ -34,7 +34,7 @@ jobs:
             outputs:
               docs:
                 type: postgres
-                host:localhost
+                host: localhost
                 user: ${{ secrets.DBT_POSTGRES_USER }}
                 password: ${{ secrets.DBT_POSTGRES_PASSWORD }}
                 port: 5432
