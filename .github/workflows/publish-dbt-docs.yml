@@ -53,7 +53,7 @@ jobs:
                 password: ${{ secrets.DBT_POSTGRES_PASSWORD }}
                 port: 5432
                 dbname: ${{ secrets.DBT_POSTGRES_DB }}
-                schema: gtm_case_docs
+                schema: gtm_case_dev
                 threads: 4
           EOF
         working-directory: .
