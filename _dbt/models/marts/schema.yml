@@ -39,17 +39,40 @@ models:
       - name: total_cost_usd
         description: Total channel cost for the month — salary, commissions, and advertising (inbound only).
         data_type: numeric(12,2)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              name: mart_cac_ltv_total_cost_positive
       - name: new_customers_won
         description: Closed won opportunities cohort-attributed to this channel and month.
         data_type: bigint
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              name: mart_cac_ltv_won_non_negative
       - name: cac_usd
         description: >
           Customer acquisition cost. total_cost_usd / new_customers_won.
           Null where new_customers_won = 0.
         data_type: numeric(12,2)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              where: "cac_usd is not null"
+              name: mart_cac_ltv_cac_positive_or_null
       - name: avg_predicted_monthly_gmv_usd
         description: "{{ doc('predicted_monthly_gmv_usd') }} Average across won leads in this cohort month."
         data_type: numeric(12,2)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1000000
+                inclusive: true
+              name: mart_cac_ltv_gmv_plausible_range
       - name: avg_estimated_ltv_usd
         description: "{{ doc('estimated_annual_ltv_usd') }} Average across won leads in this cohort month."
         data_type: numeric(12,2)
@@ -58,6 +81,12 @@ models:
           avg_estimated_ltv_usd / cac_usd. Measures return on acquisition spend.
           Null where cac_usd is null or zero.
         data_type: numeric(8,4)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              where: "cac_ltv_ratio is not null"
+              name: mart_cac_ltv_ratio_positive_or_null
 
   - name: mart_gtm_funnel
     description: >
@@ -100,9 +129,19 @@ models:
       - name: leads_created
         description: Total leads entering the funnel this month for this channel.
         data_type: bigint
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              name: mart_gtm_funnel_leads_positive
       - name: demos_set
         description: Leads that progressed to a scheduled demo.
         data_type: bigint
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "<= leads_created"
+              name: mart_gtm_funnel_demos_set_lte_leads
       - name: demos_held
         description: Leads where a demo was actually conducted.
         data_type: bigint
@@ -115,34 +154,80 @@ models:
       - name: lead_to_demo_set_rate
         description: demos_set / leads_created. Null-safe.
         data_type: numeric(6,4)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+              name: mart_gtm_funnel_lead_to_demo_rate_bounded
       - name: demo_set_to_held_rate
         description: demos_held / demos_set. Show rate. Null-safe.
         data_type: numeric(8,4)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              where: "demo_set_to_held_rate is not null"
+              name: mart_gtm_funnel_show_rate_non_negative
       - name: demo_to_close_rate
         description: closed_won / demos_held. Null-safe.
         data_type: numeric(6,4)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+              name: mart_gtm_funnel_demo_to_close_rate_bounded
       - name: overall_conversion_rate
         description: closed_won / leads_created. End-to-end funnel efficiency. Null-safe.
         data_type: numeric(6,4)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+              name: mart_gtm_funnel_overall_cvr_bounded
       - name: avg_speed_to_first_contact_hours
         description: "{{ doc('speed_to_first_contact_hours') }} Average across converted inbound leads in cohort."
         data_type: numeric(10,2)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              where: "avg_speed_to_first_contact_hours is not null"
+              name: mart_gtm_funnel_speed_positive_or_null
       - name: avg_days_in_funnel
         description: "{{ doc('days_in_funnel') }} Average across converted leads in cohort."
         data_type: numeric(8,2)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+              where: "avg_days_in_funnel is not null"
+              name: mart_gtm_funnel_days_positive_or_null
       - name: avg_activity_count
         description: "{{ doc('total_activity_count') }} Average across all leads in cohort."
         data_type: numeric(8,2)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              where: "avg_activity_count is not null"
+              name: mart_gtm_funnel_activity_non_negative
 
   - name: mart_leading_indicators
     description: >
       One row per lead. Scores the full prospect universe with engagement signals
-      and a rule-based conversion probability tier (hot / warm / cold).
+      and a rule-based conversion probability tier (hot / warm / converted / cold).
 
       Tier thresholds are derived from observed conversion rates in this dataset:
-        hot:  connected_with_decision_maker = true → 24–41% conversion (10x lift)
-        warm: active engagement + fast inbound response (≤72h) or high GMV (>$6,279/mo)
-        cold: all remaining leads
+        hot:       connected_with_decision_maker = true → 24–41% conversion (10x lift)
+        warm:      active engagement + fast inbound response (≤72h) or high GMV (>$6,279/mo)
+        converted: already converted to opportunity — active customer, upsell/expansion target
+        cold:      all remaining leads
 
       activity_density_score normalizes total touches by days in funnel,
       providing an engagement intensity signal independent of funnel duration.
@@ -163,6 +248,11 @@ models:
         data_type: varchar
         tests:
           - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_gtm__leads')
+                field: lead_id
+              name: mart_leading_indicators_lead_id_fk
       - name: channel
         description: "{{ doc('channel_derived') }}"
         data_type: varchar
@@ -186,40 +276,80 @@ models:
       - name: speed_to_first_contact_hours
         description: "{{ doc('speed_to_first_contact_hours') }}"
         data_type: numeric(10,2)
+        tests:
+          - dbt_utils.not_null_proportion:
+              arguments:
+                at_least: 0.20
+              name: mart_leading_indicators_speed_min_population
       - name: days_in_funnel
         description: "{{ doc('days_in_funnel') }}"
         data_type: numeric(8,2)
       - name: total_activity_count
         description: "{{ doc('total_activity_count') }}"
         data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              name: mart_leading_indicators_activity_non_negative
+      - name: last_sales_activity_at
+        description: >
+          Timestamp of most recent activity across all channels. Used as the
+          incremental watermark — any lead touched since the last run reprocesses.
+          15% null (leads with no recorded activity).
+        data_type: timestamp
       - name: activity_density_score
         description: >
           total_activity_count / greatest(days_in_funnel, 1). Engagement intensity
           normalized by time in funnel. Null where days_in_funnel is not computable.
           Use for ranking within cohorts, not as a standalone threshold.
         data_type: numeric(8,4)
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              where: "activity_density_score is not null"
+              name: mart_leading_indicators_density_non_negative
       - name: predicted_monthly_gmv_usd
         description: "{{ doc('predicted_monthly_gmv_usd') }}"
         data_type: numeric(12,2)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1000000
+                inclusive: true
+              name: mart_leading_indicators_gmv_plausible_range
       - name: estimated_annual_ltv_usd
         description: "{{ doc('estimated_annual_ltv_usd') }}"
         data_type: numeric(12,2)
       - name: marketplace_count
         description: "{{ doc('marketplace_count') }}"
         data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              where: "marketplace_count is not null"
+              name: mart_leading_indicators_marketplace_count_non_negative
       - name: has_olo_tool
         description: "{{ doc('has_olo_tool') }}"
         data_type: boolean
       - name: conversion_probability_tier
         description: >
           Rule-based prospect tier derived from observed conversion rates.
-          hot:  connected_with_decision_maker = true (24–41% observed conversion)
-          warm: activity > 0 AND (speed_to_first_contact_hours ≤ 72 OR predicted_monthly_gmv_usd > 6279)
-          cold: all remaining leads (1–3% observed conversion)
+          hot:       connected_with_decision_maker = true (24–41% observed conversion)
+          warm:      activity > 0 AND (speed_to_first_contact_hours ≤ 72 OR predicted_monthly_gmv_usd > 6279)
+          converted: already converted to opportunity — active customer, upsell/expansion target
+          cold:      all remaining leads (1–3% observed conversion)
+          null:      is_disqualified = true (excluded from scoring)
           Thresholds: speed 72h = converted-lead p75; GMV $6,279 = dataset p75.
+          See tests/assert_mart_leading_indicators_disqualified_tier_null for enforcement.
+          See tests/assert_mart_leading_indicators_converted_not_cold for signal quality check.
         data_type: varchar
         tests:
-          - not_null
           - accepted_values:
               arguments:
-                values: ["hot", "warm", "cold"]
+                values: ["hot", "warm", "cold", "converted"]
+              where: "is_disqualified = false or is_disqualified is null"
+              name: mart_leading_indicators_tier_valid_values
