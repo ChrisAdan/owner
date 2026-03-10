@@ -353,3 +353,95 @@ models:
                 values: ["hot", "warm", "cold", "converted"]
               where: "is_disqualified = false or is_disqualified is null"
               name: mart_leading_indicators_tier_valid_values
+
+  - name: mart_data_quality_monitor
+    description: >
+      One row per calendar month, scoped to Jan–Jun 2024 (expense window).
+      Joins estimated revenue (new_customers_won * avg_estimated_ltv_usd from
+      mart_cac_ltv) with monthly audit finding counts and density metrics from
+      both source tables. Intended as a monthly health check: did bad data spike
+      in a month revenue dropped?
+
+      Revenue proxy is estimated annual LTV attributed to cohort-month won leads —
+      directional signal only, not realized revenue. Consistent with mart_cac_ltv.
+      mom_ columns are null for the first month in the window.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: dq_monitor_sk
+        description: "{{ doc('surrogate_key') }} Natural key: month_date."
+        data_type: varchar
+        tests:
+          - not_null
+          - unique
+      - name: month_date
+        description: First day of the calendar month. Scoped to Jan–Jun 2024.
+        data_type: date
+        tests:
+          - not_null
+      - name: new_customers_won
+        description: Total closed won across both channels for the month.
+        data_type: bigint
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              name: mart_dq_monitor_won_non_negative
+      - name: estimated_monthly_ltv_usd
+        description: new_customers_won * avg_estimated_ltv_usd summed across channels. Revenue proxy.
+        data_type: numeric(12,2)
+      - name: total_cost_usd
+        description: Total GTM spend across both channels for the month.
+        data_type: numeric(12,2)
+      - name: blended_cac_usd
+        description: Weighted average CAC across channels. Null where no customers won.
+        data_type: numeric(12,2)
+      - name: mom_revenue_change_usd
+        description: Month-over-month change in estimated_monthly_ltv_usd. Null for first month.
+        data_type: numeric(12,2)
+      - name: total_audit_findings
+        description: Total audit findings across both source tables for the month.
+        data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              name: mart_dq_monitor_findings_non_negative
+      - name: total_audit_affected_records
+        description: Total distinct records flagged across both source tables.
+        data_type: integer
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+              name: mart_dq_monitor_affected_non_negative
+      - name: total_records_in_scope
+        description: Total source records created this month across both tables.
+        data_type: integer
+      - name: overall_audit_density
+        description: total_audit_affected_records / total_records_in_scope. Cross-table density signal.
+        data_type: numeric(6,4)
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+              where: "overall_audit_density is not null"
+              name: mart_dq_monitor_density_bounded
+      - name: leads_audit_findings
+        description: Audit findings from stg_gtm__leads__audit for the month.
+        data_type: integer
+      - name: opps_audit_findings
+        description: Audit findings from stg_gtm__opportunities__audit for the month.
+        data_type: integer
+      - name: leads_audit_affected
+        description: Distinct leads flagged in audit for the month.
+        data_type: integer
+      - name: opps_audit_affected
+        description: Distinct opportunities flagged in audit for the month.
+        data_type: integer
+      - name: mom_audit_findings_change
+        description: Month-over-month change in total_audit_findings. Null for first month. Positive = more bad data.
+        data_type: integer
