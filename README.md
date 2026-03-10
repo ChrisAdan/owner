@@ -14,8 +14,9 @@ _dbt/
 │   ├── _docs/            # Reusable doc blocks by domain
 │   ├── staging/          # One model per source table; cleaning, typing, deduplication
 │   ├── intermediate/     # Joins, enrichment, and derived metrics
-│   └── marts/            # Business-grain tables for consumption
-└── seeds/                # Source data proxies (replaced by {{ source() }} on Snowflake)
+│   └── marts/            # Business-grain incremental tables for consumption
+├── seeds/                # Source data proxies (replaced by {{ source() }} on Snowflake)
+└── tests/                # Singular data tests
 ```
 
 Analyses use `{{ ref() }}` and compile via `dbt compile --select <analysis_name>`. Compiled SQL lands in `target/compiled/` and can be run directly against any target.
@@ -26,7 +27,7 @@ Analyses use `{{ ref() }}` and compile via `dbt compile --select <analysis_name>
 
 **Intermediate** — typed → enriched. Joins, channel derivation, funnel aggregation, LTV estimation. All intermediate models are views with contract enforcement. Types are cast on initialization for downstream propagation. See type notes in each model for specifics.
 
-**Marts** — enriched → business grain. Three table-materialized models, each contract-enforced with explicit numeric precision on every column.
+**Marts** — enriched → business grain. Three incremental models (`delete+insert`), each contract-enforced with explicit numeric precision on every column. Lookback window controlled by `var('incremental_lookback_months')` (default: 2). All columns cast explicitly in the `final` CTE to match contract-declared types — required for Postgres, where `on_schema_change='fail'` treats `text` vs `varchar` and `numeric` vs `numeric(p,s)` as mismatches.
 
 ---
 
@@ -51,10 +52,11 @@ One row per channel per month, scoped to Jan–Jun 2024. Combines funnel convers
 
 **Key modeling decisions:**
 
-- Advertising spend attributed exclusively to inbound — paid ads drive inbound form submissions by construction. Outbound BDR activity generates headcount cost only. This follows directly from the business model; it is not an assumption.
+- Advertising spend attributed exclusively to inbound — paid ads drive inbound form submissions by construction. Outbound BDR activity generates headcount cost only.
 - Salary costs arrive pre-split by channel in source — no allocation required.
 - CAC computed as `total_cost_usd / closed_won` within entry-month cohort. Cohort attribution understates true CAC for long sales cycles but is appropriate for pipeline efficiency analysis.
 - Inner join to expenses naturally limits rows to months where cost data exists. Full funnel history lives in `mart_gtm_funnel`.
+- Incremental: lookback filter applied to both `funnel` and `won_leads_monthly` CTEs to keep LTV averages consistent with reprocessed cohort months. Expenses not filtered — six rows, fully loaded on initial run.
 
 ### `mart_gtm_funnel`
 
@@ -62,21 +64,26 @@ One row per channel per month, full history from 2020. Funnel conversion counts 
 
 **Key modeling decisions:**
 
-- Lead month is channel-aware: inbound uses `form_submission_date`, outbound uses `first_sales_call_at` — the earliest reliable timestamps marking funnel entry per channel.
+- Lead month is channel-aware: inbound uses `form_submission_date`, outbound uses `first_sales_call_at`.
 - `demo_set_to_held_rate` declared `numeric(8,4)` not `numeric(6,4)`. Cohort timing means `demos_held` can exceed `demos_set` in a given entry month (demo set in month N, held in month N+1), producing ratios > 1.0. This is a data characteristic, not a quality issue.
 - Engagement averages scoped to converted leads — measuring the path that worked. `avg_activity_count` includes all leads as a baseline signal.
+- Incremental: lookback filter on `leads_with_month` (row-level) and on the final join to `funnel`. Filter not applied inside the `funnel` CTE itself — it is already aggregated, and filtering it would silently drop cohort rows rather than reprocess them.
 
 ### `mart_leading_indicators`
 
 One row per lead. Scores the full prospect universe with a rule-based conversion probability tier derived from observed conversion rates.
 
-| Tier | Rule                                                        | Observed conversion rate |
-| ---- | ----------------------------------------------------------- | ------------------------ |
-| hot  | `connected_with_decision_maker = true`                      | 24.5%                    |
-| warm | activity > 0 AND (speed ≤ 72h OR predicted GMV > $6,279/mo) | 5.2%                     |
-| cold | all remaining                                               | 1.6%                     |
+| Tier      | Rule                                                        | Observed conversion rate |
+| --------- | ----------------------------------------------------------- | ------------------------ |
+| hot       | `connected_with_decision_maker = true`                      | 24.5%                    |
+| warm      | activity > 0 AND (speed ≤ 72h OR predicted GMV > $6,279/mo) | 5.2%                     |
+| converted | `is_converted = true` (not otherwise hot/warm)              | — active customer        |
+| cold      | all remaining                                               | 1.6%                     |
+| null      | `is_disqualified = true`                                    | excluded from scoring    |
 
-Tier thresholds are data-derived: speed 72h = converted-lead p75; GMV $6,279 = dataset p75. `activity_density_score` (total touches / days in funnel) is designed for ranking within tiers, not as a standalone cutoff.
+Tier thresholds are data-derived: speed 72h = converted-lead p75; GMV $6,279 = dataset p75. Hot and warm signals take precedence over `converted` — a converted lead who also reached a DM stays `hot` as the stronger upsell signal. `activity_density_score` (total touches / days in funnel) is designed for ranking within tiers, not as a standalone cutoff.
+
+Incremental: watermark on `last_sales_activity_at`. Any lead touched since the last run reprocesses — catches status changes (e.g. `working` → `disqualified`) as well as new activity. Watermark resolved in a separate `watermark` CTE joined via `cross join` to satisfy Postgres's restriction on aggregates in WHERE clauses.
 
 ---
 
@@ -93,12 +100,62 @@ Tier thresholds are data-derived: speed 72h = converted-lead p75; GMV $6,279 = d
 
 ---
 
-## Snowflake Adapter Notes
+## Running Locally (Postgres)
 
-This project runs against Postgres locally (seeds as source proxy) and targets Snowflake in production (`demo_db.gtm_case`). Two changes required when switching adapters:
+Seeds must be loaded before build. `dbt build` interleaves seeds with model tests in a way that causes tests to run before seed data exists — separate the steps:
 
-1. **`int_restaurant__profile`**: `array_length(string_to_array(col, ','), 1)` → `array_size(split(col, ','))`.
-2. **Sources**: Replace seed refs with `{{ source('gtm_case', 'table_name') }}`. The `_sources.yml` is already defined; only the staging `from` clauses need updating.
+```bash
+cd _dbt
+pip install dbt-postgres
+dbt deps
+dbt seed                                                  # load source data once
+dbt build --full-refresh --exclude resource_type:seed     # initial build
+dbt build --exclude resource_type:seed                    # subsequent incremental runs
+```
+
+Set Postgres credentials in `~/.dbt/profiles.yml` under the `dev` target (`gtm_case_dev` schema).
+
+---
+
+## Switching to Snowflake
+
+Three changes required when targeting Snowflake (`demo_db.gtm_case`):
+
+1. **`profiles.yml`** — point `prod` target at Snowflake. Credentials go in `~/.dbt/profiles.yml`; do not commit them.
+
+2. **`int_restaurant__profile`** — one Postgres-specific function:
+
+   ```sql
+   -- Postgres
+   array_length(string_to_array(col, ','), 1)
+   -- Snowflake
+   array_size(split(col, ','))
+   ```
+
+3. **Staging `from` clauses** — replace seed refs with source refs. `_sources.yml` is already defined pointing at `demo_db.gtm_case`. In each staging model change:
+
+   ```sql
+   -- Postgres (seed proxy)
+   from {{ ref('leads') }}
+   -- Snowflake (source)
+   from {{ source('gtm_case', 'leads') }}
+   ```
+
+4. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres-specific workarounds for `on_schema_change='fail'` type matching. Snowflake handles `varchar`/`text` equivalence natively and these casts are harmless to leave in place, but they can be removed for cleaner SQL.
+
+---
+
+## dbt Docs
+
+Docs are published to GitHub Pages on manual trigger via the GitHub Actions UI: **Actions → Publish dbt Docs → Run workflow**.
+
+To generate and browse docs locally:
+
+```bash
+cd _dbt
+dbt docs generate
+dbt docs serve
+```
 
 ---
 
@@ -156,21 +213,6 @@ The actionable boundary is 72 hours: leads contacted within that window convert 
 
 **What `mart_leading_indicators` enables:**
 
-A scored, tiered view of every lead: daily hot-tier queue for DM-reachable contacts; warm-tier flagging of high-GMV or fast-response-window inbound leads; cold-tier triage to suppress stale inventory. `activity_density_score` ranks within tiers by engagement intensity independent of funnel duration.
+A scored, tiered view of every lead: daily hot-tier queue for DM-reachable contacts; warm-tier flagging of high-GMV or fast-response-window inbound leads; cold-tier triage to suppress stale inventory; `converted` tier separating active customers for upsell/expansion targeting. `activity_density_score` ranks within tiers by engagement intensity independent of funnel duration.
 
 **The longer-term extension:** The rule-based tier model is a foundation. With sufficient history, thresholds become trained probability estimates — the mart grain and feature set (speed, activity, GMV, DM contact, marketplace signals) map directly to a binary classification training dataset. The infrastructure supports that upgrade without structural changes.
-
----
-
-## Running This Project
-
-```bash
-cd _dbt
-pip install dbt-postgres
-dbt deps
-dbt seed        # load source data
-dbt build       # build and test all models
-dbt docs generate && dbt docs serve
-```
-
-**Profiles:** Dev target uses Postgres (`gtm_case_dev` schema). Prod target uses Snowflake (`demo_db.gtm_case_prod`). Set credentials in `~/.dbt/profiles.yml`.
