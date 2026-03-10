@@ -19,7 +19,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dbt
-        run: pip install dbt-postgres==1.11.6 dbt-utils
+        run: pip install dbt-core dbt-postgres
 
       - name: Install dbt packages
         working-directory: _dbt
