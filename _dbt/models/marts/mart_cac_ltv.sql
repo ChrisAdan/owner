@@ -27,16 +27,41 @@
 --     and bigint/bigint = bigint integer division, which overflows in downstream expressions.
 --   - cac_ltv_ratio computed in a separate cte (with_ratio) to avoid nesting safe_divide,
 --     which produces unpredictable type inference in postgres.
+--
+-- incremental notes:
+--   - strategy: delete+insert on [month_date, channel]
+--   - lookback: var('incremental_lookback_months') trailing months reprocessed each run.
+--   - filter applied to two CTEs:
+--       funnel: limits which cohort months are aggregated and joined
+--       won_leads_monthly: limits which won leads update LTV averages
+--     both must be filtered consistently — filtering only funnel would cause
+--     stale LTV averages to persist for reprocessed cohort months.
+--   - expenses is not filtered: it covers only jan–jun 2024 and is fully loaded
+--     on initial run. the inner join to expenses already bounds mart output.
+--   - initial load and schema changes: dbt build --full-refresh
 
 {{
     config(
-        materialized='table',
+        materialized='incremental',
+        unique_key=['month_date', 'channel'],
+        incremental_strategy='delete+insert',
+        on_schema_change='fail',
         contract={"enforced": true}
     )
 }}
 
+{% set lookback_filter %}
+    month_date >= (
+        date_trunc('month', current_date)
+        - (interval '1 month' * {{ var('incremental_lookback_months') }})
+    )::date
+{% endset %}
+
 with funnel as (
     select * from {{ ref('int_funnel__conversion_rates') }}
+    {% if is_incremental() %}
+    where {{ lookback_filter }}
+    {% endif %}
 ),
 
 expenses as (
@@ -65,6 +90,18 @@ won_leads_monthly as (
     inner join leads_enriched l
         on r.lead_sk = l.lead_sk
     where r.is_won = true
+    {% if is_incremental() %}
+        and (
+            case
+                when l.channel = 'inbound'
+                then date_trunc('month', l.form_submission_date::timestamp)::date
+                else date_trunc('month', l.first_sales_call_at)::date
+            end
+        ) >= (
+            date_trunc('month', current_date)
+            - (interval '1 month' * {{ var('incremental_lookback_months') }})
+        )::date
+    {% endif %}
 ),
 
 won_ltv_by_month as (

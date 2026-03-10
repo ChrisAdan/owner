@@ -34,17 +34,52 @@
 --     on activity + gmv signals only.
 --   - activity_density_score is a relative signal — use for ranking within
 --     cohorts, not as a standalone threshold.
+--
+-- incremental notes:
+--   - strategy: delete+insert on lead_sk (postgres does not support MERGE pre-v15)
+--   - watermark: last_sales_activity_at — any lead touched since last run reprocesses.
+--     catches status changes (e.g. working → disqualified) as well as new activity,
+--     since both update last_sales_activity_at in the CRM.
+--   - postgres restriction: aggregate functions are not allowed in WHERE clauses,
+--     even inside a subquery. watermark is resolved in a CTE before the leads CTE
+--     and joined via cross join to produce a scalar comparison value.
+--   - initial load and schema changes: dbt build --full-refresh
 
 {{
     config(
-        materialized='table',
+        materialized='incremental',
+        unique_key='lead_sk',
+        incremental_strategy='delete+insert',
+        on_schema_change='fail',
         contract={"enforced": true}
     )
 }}
 
+{% if is_incremental() %}
+
+with watermark as (
+    -- resolve max watermark before leads CTE to satisfy postgres restriction:
+    -- aggregate functions are not allowed in WHERE, even in subqueries.
+    -- cross join below produces a single scalar value for the filter.
+    select max(last_sales_activity_at) as max_activity_at
+    from {{ this }}
+    where last_sales_activity_at is not null
+),
+
+leads as (
+    select l.*
+    from {{ ref('int_leads__enriched') }} l
+    cross join watermark w
+    where l.last_sales_activity_at >= w.max_activity_at
+),
+
+{% else %}
+
 with leads as (
     select * from {{ ref('int_leads__enriched') }}
 ),
+
+{% endif %}
 
 restaurant as (
     select * from {{ ref('int_restaurant__profile') }}
@@ -62,6 +97,7 @@ joined as (
         l.speed_to_first_contact_hours,
         l.days_in_funnel,
         l.total_activity_count,
+        l.last_sales_activity_at,
         r.predicted_monthly_gmv_usd,
         r.estimated_annual_ltv_usd,
         r.marketplace_count,
@@ -80,6 +116,9 @@ joined as (
         -- conversion probability tier
         -- thresholds from observed conversion rates (see header comments)
         case
+            when l.is_converted = true
+                then 'converted'
+            when is_disqualified then null
             when l.connected_with_decision_maker = true
                 then 'hot'
             when l.total_activity_count > 0
@@ -108,6 +147,7 @@ final as (
         speed_to_first_contact_hours,
         days_in_funnel,
         total_activity_count,
+        last_sales_activity_at,
         activity_density_score,
         predicted_monthly_gmv_usd,
         estimated_annual_ltv_usd,
