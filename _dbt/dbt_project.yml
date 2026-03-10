@@ -9,6 +9,9 @@ snapshot-paths: ["snapshots"]
 analysis-paths: ["analyses"]
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  incremental_lookback_months: 2
+
 seeds:
   owner:
     +quote_columns: false
