@@ -1,0 +1,150 @@
+version: 2
+
+analyses:
+  - name: inbound_speed_conversion_buckets
+    description: >
+      Validates the speed-to-first-contact conversion cliff cited in the README.
+      Claim: inbound leads contacted within 72 hours convert at ~4x the rate of
+      leads contacted after 7 days. Negative speed values (26 leads where call
+      precedes form submission) are excluded as a data quality artifact. Groups
+      inbound leads into four speed buckets and reports lead count, conversion
+      rate, and won rate per bucket.
+    columns:
+      - name: speed_bucket
+        description: Speed bucket label (1_le_24h, 2_24_to_72h, 3_72_to_168h, 4_gt_168h).
+      - name: leads
+        description: Total inbound leads in this speed bucket.
+      - name: converted
+        description: Leads that converted to an opportunity.
+      - name: won
+        description: Leads that reached Closed Won.
+      - name: conversion_rate
+        description: converted / leads. Primary signal for speed-to-conversion cliff.
+      - name: won_rate
+        description: won / leads.
+      - name: avg_speed_hours
+        description: Average speed to first contact in hours for this bucket.
+
+  - name: inbound_speed_recency_breakdown
+    description: >
+      Decomposes the >168h speed bucket to understand how much of the low
+      conversion rate is driven by genuinely stale leads (2020 form submissions
+      contacted in 2024) vs. leads with a week-to-month response delay. 1,319
+      leads have speed > 10,000h — if these dominate the >168h bucket they
+      compress the apparent conversion rate for leads with a 1-4 week delay,
+      which is a meaningfully different and more actionable signal.
+    columns:
+      - name: recency_bucket
+        description: >
+          Recency bucket (1_contacted_le_1_week, 2_contacted_1w_to_1mo,
+          3_contacted_1mo_to_1yr, 4_stale_gt_1yr).
+      - name: leads
+        description: Total inbound leads in this recency bucket.
+      - name: converted
+        description: Leads that converted to an opportunity.
+      - name: conversion_rate
+        description: converted / leads.
+      - name: min_hours
+        description: Minimum speed to first contact in this bucket.
+      - name: max_hours
+        description: Maximum speed to first contact in this bucket.
+
+  - name: july_outbound_completeness
+    description: >
+      Verifies whether July 2024 outbound data represents a genuine conversion
+      collapse or a data cutoff artifact. Key question: is the dataset simply
+      incomplete for July, or did outbound conversion genuinely drop to
+      near-zero? Reports lead volume, conversion rate, and date range by channel
+      for July 2024 entries. July covers only the first 10 days and is excluded
+      from trend analysis in the README.
+    columns:
+      - name: channel
+        description: Sales channel — inbound or outbound.
+      - name: leads_created
+        description: Total leads entering the funnel in July 2024 for this channel.
+      - name: closed_won
+        description: Closed won opportunities for July 2024 cohort.
+      - name: conversion_rate
+        description: closed_won / leads_created.
+      - name: earliest_entry
+        description: Earliest funnel entry date in July for this channel.
+      - name: latest_entry
+        description: Latest funnel entry date in July for this channel.
+      - name: latest_activity
+        description: Most recent sales activity date across all July leads.
+
+  - name: july_outbound_won_detail
+    description: >
+      Inspects the single outbound won lead in July 2024 to determine whether
+      it represents a genuine close or an edge case (e.g. a lead that closed
+      much later than it entered the funnel). Used to validate the July
+      completeness assessment before citing July exclusion in documentation.
+    columns:
+      - name: lead_id
+        description: Salesforce lead identifier.
+      - name: entry_date
+        description: Date of first outbound sales call — funnel entry point.
+      - name: close_date
+        description: Opportunity close date.
+      - name: stage_name
+        description: Current opportunity stage.
+      - name: demo_set_date
+        description: Date demo was scheduled.
+      - name: demo_held
+        description: Whether a demo was conducted.
+      - name: total_activity_count
+        description: Total sales touchpoints for this lead.
+      - name: days_in_funnel
+        description: Days from first sales call to last activity.
+
+  - name: outbound_funnel_stage_rates
+    description: >
+      Verifies the README claim that outbound lead-to-demo-set rate fell from
+      5.3% in January 2024 to 1.8% in June 2024, and that the drop is
+      concentrated at the top of the funnel rather than at the AE close stage.
+      Pulls directly from mart_gtm_funnel for outbound channel, Jan-Jun 2024.
+    columns:
+      - name: month_date
+        description: First day of the cohort month.
+      - name: channel
+        description: Sales channel — outbound for all rows in this analysis.
+      - name: leads_created
+        description: Total outbound leads entering the funnel this month.
+      - name: demos_set
+        description: Leads that progressed to a scheduled demo.
+      - name: demos_held
+        description: Leads where a demo was actually conducted.
+      - name: closed_won
+        description: Leads that converted to Closed Won.
+      - name: lead_to_demo_set_rate
+        description: demos_set / leads_created. Primary signal for top-of-funnel deterioration.
+      - name: demo_set_to_held_rate
+        description: demos_held / demos_set. Show rate.
+      - name: demo_to_close_rate
+        description: closed_won / demos_held. AE close efficiency.
+      - name: overall_conversion_rate
+        description: closed_won / leads_created. End-to-end funnel efficiency.
+
+  - name: outbound_headcount_cost_trend
+    description: >
+      Verifies the README claim that outbound headcount cost grew 31% from
+      January to June 2024 ($38,076 to $50,000) while CAC increased 4x.
+      Sources salary costs from int_expenses__by_channel_month (authoritative
+      cost upstream of mart_cac_ltv) and joins to mart_cac_ltv for won count
+      and CAC. Shows the cost/yield divergence — cost growing slowly while
+      wins collapsed — as the core outbound efficiency story.
+    columns:
+      - name: month_date
+        description: First day of the calendar month.
+      - name: headcount_cost_usd
+        description: Outbound salary and commission cost for the month.
+      - name: total_cost_usd
+        description: Total outbound cost (headcount only — no advertising for outbound).
+      - name: new_customers_won
+        description: Closed won customers cohort-attributed to this outbound month.
+      - name: cac_usd
+        description: Outbound CAC for the month.
+      - name: cac_ltv_ratio
+        description: Outbound CAC:LTV ratio for the month.
+      - name: headcount_cost_growth_pct
+        description: Headcount cost growth vs January 2024 baseline. January = 0%.
