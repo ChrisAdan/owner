@@ -3,29 +3,27 @@ version: 2
 # ──────────────────────────────────────────────────────────────────────────────
 # Owner GTM Analytics — Semantic Layer Metrics
 # ──────────────────────────────────────────────────────────────────────────────
-# Format: dbt Semantic Layer / MetricFlow (dbt Core 1.6+)
+# Format: dbt Semantic Layer / MetricFlow (dbt Core 1.9+)
 # Adapter: Snowflake (production) / Postgres (dev)
 #
 # Semantic models define the grain, dimensions, and measures available to
 # MetricFlow. Metrics reference those measures to define queryable KPIs.
 #
 # Usage examples (dbt Cloud or dbt-sl CLI):
-#   mf query --metrics cac_usd --group-by channel,metric_time__month
-#   mf query --metrics cac_ltv_ratio,outbound_conversion_rate --group-by metric_time__month
+#   mf query --metrics cac_usd --group-by channel,month_date__month
+#   mf query --metrics cac_ltv_ratio,lead_to_demo_set_rate --group-by month_date__month
 #   mf query --metrics hot_lead_count,warm_lead_count --group-by channel
 #
 # Agentic layer note (Claude Code / Cortex Analyst):
 #   These definitions are the authoritative source of metric semantics.
 #   An LLM query agent grounded in this file can answer GTM questions in plain
-#   English without writing SQL — MetricFlow/Cortex handles compilation.
+#   English without writing SQL -- MetricFlow/Cortex handles compilation.
 #   See semantic_model.yaml for the parallel Snowflake Cortex Analyst spec.
 # ──────────────────────────────────────────────────────────────────────────────
-
 
 # ── SEMANTIC MODELS ───────────────────────────────────────────────────────────
 
 semantic_models:
-
   - name: gtm_channel_month
     description: >
       One row per channel per calendar month. Joins mart_cac_ltv (cost + CAC)
@@ -33,7 +31,7 @@ semantic_models:
       grain. Primary semantic model for cohort-level GTM analysis.
     model: ref('mart_cac_ltv')
     defaults:
-      agg_time_dimension: metric_time
+      agg_time_dimension: month_date
 
     entities:
       - name: channel_month
@@ -41,7 +39,7 @@ semantic_models:
         expr: cac_ltv_sk
 
     dimensions:
-      - name: metric_time
+      - name: month_date
         type: time
         type_params:
           time_granularity: month
@@ -88,7 +86,6 @@ semantic_models:
           subscription unit economics. Values < 1 mean acquisition costs
           exceed estimated lifetime value.
 
-
   - name: gtm_funnel
     description: >
       One row per channel per calendar month. Full funnel history from 2020.
@@ -96,7 +93,7 @@ semantic_models:
       analysis and channel comparison.
     model: ref('mart_gtm_funnel')
     defaults:
-      agg_time_dimension: metric_time
+      agg_time_dimension: month_date
 
     entities:
       - name: funnel_channel_month
@@ -104,7 +101,7 @@ semantic_models:
         expr: gtm_funnel_sk
 
     dimensions:
-      - name: metric_time
+      - name: month_date
         type: time
         type_params:
           time_granularity: month
@@ -150,7 +147,7 @@ semantic_models:
         expr: avg_speed_to_first_contact_hours
         description: >
           Average hours from inbound form submission to first sales call.
-          Inbound only — null for outbound. Key leading indicator: sub-72h
+          Inbound only -- null for outbound. Key leading indicator: sub-72h
           response associated with ~2x conversion lift.
 
       - name: avg_days_in_funnel
@@ -160,13 +157,14 @@ semantic_models:
           Average days in funnel for converted leads. Channel-aware start point:
           inbound = form_submission_date, outbound = first_sales_call_at.
 
-
   - name: lead_universe
     description: >
       One row per lead. Full prospect universe with conversion tier scoring.
       Use for pipeline segmentation, SDR queue analysis, and lead-level
-      attribute queries. Not a time-series model — no metric_time dimension.
+      attribute queries.
     model: ref('mart_leading_indicators')
+    defaults:
+      agg_time_dimension: last_sales_activity_at
 
     entities:
       - name: lead
@@ -174,6 +172,12 @@ semantic_models:
         expr: lead_sk
 
     dimensions:
+      - name: last_sales_activity_at
+        type: time
+        type_params:
+          time_granularity: day
+        expr: last_sales_activity_at
+
       - name: channel
         type: categorical
         expr: channel
@@ -182,10 +186,10 @@ semantic_models:
         type: categorical
         expr: conversion_probability_tier
         description: >
-          hot: connected_with_decision_maker = true (24–41% observed conversion).
-          warm: activity > 0 AND (speed ≤ 72h OR predicted GMV > $6,279/mo).
-          converted: already a customer — upsell/expansion target.
-          cold: all remaining active leads (~1–3% conversion).
+          hot: connected_with_decision_maker = true (24-41% observed conversion).
+          warm: activity > 0 AND (speed 72h OR predicted GMV > $6,279/mo).
+          converted: already a customer -- upsell/expansion target.
+          cold: all remaining active leads (~1-3% conversion).
           null: disqualified leads (excluded from scoring).
 
       - name: is_converted
@@ -225,11 +229,9 @@ semantic_models:
           Average engagement intensity (touches per day in funnel).
           Use to rank within cohorts, not as a standalone threshold.
 
-
 # ── METRICS ───────────────────────────────────────────────────────────────────
 
 metrics:
-
   # ── CAC / LTV ──────────────────────────────────────────────────────────────
 
   - name: cac_usd
@@ -237,7 +239,7 @@ metrics:
     description: >
       Average cost to acquire one new customer, by channel and month.
       total_cost_usd / new_customers_won within cohort month.
-      Interpret late-window months (May–Jun 2024) with caution — leads may
+      Interpret late-window months (May-Jun 2024) with caution -- leads may
       not have had time to close within the expense observation window.
     type: simple
     type_params:
@@ -248,7 +250,7 @@ metrics:
     description: >
       avg_estimated_ltv_usd / cac_usd. Benchmark: > 3x is healthy for
       subscription businesses. < 1x means acquisition cost exceeds LTV.
-      Jun 2024 outbound = 1.6x — approaching viability floor.
+      Jun 2024 outbound = 1.6x -- approaching viability floor.
     type: simple
     type_params:
       measure: cac_ltv_ratio
@@ -276,7 +278,6 @@ metrics:
     type_params:
       measure: avg_estimated_ltv_usd
 
-
   # ── FUNNEL ─────────────────────────────────────────────────────────────────
 
   - name: leads_created
@@ -296,11 +297,11 @@ metrics:
       measure: avg_overall_conversion_rate
 
   - name: lead_to_demo_set_rate
-    label: "Lead → demo set rate"
+    label: "Lead to demo set rate"
     description: >
       demos_set / leads_created. Top-of-funnel efficiency signal.
       Outbound rate fell from 5.3% (Jan) to 1.8% (Jun), concentrated
-      at this stage — indicating list quality or contact rate issues,
+      at this stage -- indicating list quality or contact rate issues,
       not AE close performance.
     type: simple
     type_params:
@@ -323,7 +324,6 @@ metrics:
     type_params:
       measure: avg_days_in_funnel
 
-
   # ── LEAD SCORING / PIPELINE ────────────────────────────────────────────────
 
   - name: total_lead_count
@@ -333,43 +333,54 @@ metrics:
     type_params:
       measure: lead_count
 
+  - name: converted_lead_count
+    label: "Converted leads"
+    description: Leads that converted to an opportunity.
+    type: simple
+    type_params:
+      measure: converted_lead_count
+
   - name: hot_lead_count
     label: "Hot leads"
     description: >
       Leads where connected_with_decision_maker = true.
-      Observed conversion rate: 24–41%. Highest-priority SDR/BDR queue.
-    type: where
+      Observed conversion rate: 24-41%. Highest-priority SDR/BDR queue.
+    type: simple
     type_params:
       measure: lead_count
-    filter: "{{ Dimension('lead__conversion_probability_tier') }} = 'hot'"
+    filter: |
+      {{ Dimension('lead__conversion_probability_tier') }} = 'hot'
 
   - name: warm_lead_count
     label: "Warm leads"
     description: >
-      Leads with activity > 0 AND (speed ≤ 72h OR predicted GMV > $6,279/mo).
+      Leads with activity > 0 AND (speed 72h OR predicted GMV > $6,279/mo).
       Observed conversion rate: ~5.2%.
-    type: where
+    type: simple
     type_params:
       measure: lead_count
-    filter: "{{ Dimension('lead__conversion_probability_tier') }} = 'warm'"
+    filter: |
+      {{ Dimension('lead__conversion_probability_tier') }} = 'warm'
 
   - name: cold_lead_count
     label: "Cold leads"
-    description: All remaining active leads. Observed conversion rate: ~1.6%.
-    type: where
+    description: "All remaining active leads. Observed conversion rate: ~1.6%."
+    type: simple
     type_params:
       measure: lead_count
-    filter: "{{ Dimension('lead__conversion_probability_tier') }} = 'cold'"
+    filter: |
+      {{ Dimension('lead__conversion_probability_tier') }} = 'cold'
 
   - name: converted_customer_count
     label: "Converted customers (active)"
     description: >
-      Leads already converted to opportunities — current customers.
+      Leads already converted to opportunities -- current customers.
       Upsell and expansion targeting pool.
-    type: where
+    type: simple
     type_params:
       measure: lead_count
-    filter: "{{ Dimension('lead__conversion_probability_tier') }} = 'converted'"
+    filter: |
+      {{ Dimension('lead__conversion_probability_tier') }} = 'converted'
 
   - name: avg_prospect_gmv
     label: "Avg prospect predicted GMV (USD/mo)"
@@ -382,8 +393,8 @@ metrics:
 
   - name: pipeline_conversion_rate
     label: "Pipeline conversion rate"
-    description: converted_lead_count / lead_count across the full prospect universe.
+    description: "converted_lead_count / total_lead_count across the full prospect universe."
     type: ratio
     type_params:
       numerator: converted_lead_count
-      denominator: lead_count
+      denominator: total_lead_count
