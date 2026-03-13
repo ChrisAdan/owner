@@ -1,0 +1,43 @@
+version: 2
+
+data_tests:
+  - name: assert_mart_cac_ltv_two_channels_per_month
+    description: >
+      Every month in mart_cac_ltv must have exactly one inbound row and one
+      outbound row. A missing channel indicates an upstream join dropped data —
+      e.g. expenses missing a channel, or the funnel producing no leads for a
+      month. Returns violating months; passes when zero rows returned.
+
+  - name: assert_mart_cac_ltv_outbound_cac_not_extreme
+    description: >
+      Flags months where outbound CAC exceeds inbound CAC by more than 10x.
+      A 10x gap is not a hard business rule but indicates either a data anomaly
+      (near-zero outbound wins inflating the ratio) or a channel efficiency
+      collapse worth surfacing explicitly. Jun 2024 outbound CAC ($6,250) vs
+      inbound (~$1,500) = ~4x — within bounds. Returns violating months;
+      passes when zero rows returned.
+
+  - name: assert_mart_leading_indicators_disqualified_tier_null
+    description: >
+      Disqualified leads are excluded from conversion scoring by design —
+      their conversion_probability_tier must always be null. A non-null tier
+      on a disqualified lead means the is_disqualified flag and the tier CASE
+      expression have drifted out of sync. Returns violating rows; passes when
+      zero rows returned.
+
+  - name: assert_mart_leading_indicators_converted_not_cold
+    description: >
+      A lead that actually converted should never be scored cold. The cold tier
+      represents ~1.6% conversion rate — if a converted lead lands there, the
+      tier logic is not capturing the signal that caused the conversion.
+      Systematic violations indicate tier thresholds need revisiting. Converted
+      leads that are also disqualified (null tier) are excluded — disqualification
+      takes precedence. Returns violating rows; passes when zero rows returned.
+
+  - name: assert_mart_leading_indicators_lead_count_matches_staging
+    description: >
+      The mart is lead-grain and must contain exactly one row per lead in
+      stg_gtm__leads. A count mismatch means the incremental watermark missed
+      leads, a join filtered rows unexpectedly, or duplicates were introduced.
+      Returns one row with the staging vs mart delta when counts differ; passes
+      when zero rows returned.
