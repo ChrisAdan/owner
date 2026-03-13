@@ -17,6 +17,8 @@ _dbt/
 │   └── marts/            # Business-grain incremental tables for consumption
 ├── seeds/                # Source data proxies (replaced by {{ source() }} on Snowflake)
 └── tests/                # Singular data tests
+semantic/
+└── semantic_model.yaml   # Snowflake Cortex Analyst spec (LLM query grounding)
 ```
 
 Analyses use `{{ ref() }}` and compile via `dbt compile --select <analysis_name>`. Compiled SQL lands in `target/compiled/` and can be run directly against any target.
@@ -28,6 +30,8 @@ Analyses use `{{ ref() }}` and compile via `dbt compile --select <analysis_name>
 **Intermediate** — typed → enriched. Joins, channel derivation, funnel aggregation, LTV estimation, and audit rollup to calendar month. All intermediate models are views with contract enforcement. Types are cast on initialization for downstream propagation. See type notes in each model for specifics.
 
 **Marts** — enriched → business grain. Four models: three incremental (`delete+insert`) and one table-materialized. Each is contract-enforced with explicit numeric precision on every column. Lookback window for incrementals controlled by `var('incremental_lookback_months')` (default: 2). All columns cast explicitly in the `final` CTE to match contract-declared types — required for Postgres, where `on_schema_change='fail'` treats `text` vs `varchar` and `numeric` vs `numeric(p,s)` as mismatches.
+
+**Semantic layer** — governed metric definitions on top of the marts. `_dbt/models/metrics.yml` defines the dbt Semantic Layer / MetricFlow spec. `semantic/semantic_model.yaml` defines the parallel Snowflake Cortex Analyst spec. Both ground an LLM query agent in canonical metric semantics so plain-English GTM questions resolve to correct, governed SQL without an analyst in the loop.
 
 ---
 
@@ -99,6 +103,36 @@ One row per calendar month, scoped to Jan–Jun 2024. Joins estimated revenue (`
 
 ---
 
+## Semantic Layer
+
+The mart layer is designed to serve both human analysts and LLM query agents. Two semantic specs sit on top of the marts — one for each integration path.
+
+### dbt Semantic Layer / MetricFlow (`_dbt/models/metrics.yml`)
+
+Defines three semantic models (`gtm_channel_month`, `gtm_funnel`, `lead_universe`) and 15 named metrics covering CAC, LTV, funnel rates, and lead tier counts. Requires dbt Core 1.6+ and the dbt Semantic Layer API.
+
+```bash
+# Example queries via dbt-sl CLI or a connected BI tool
+mf query --metrics cac_usd,cac_ltv_ratio --group-by channel,metric_time__month
+mf query --metrics hot_lead_count,warm_lead_count --group-by channel
+mf query --metrics lead_to_demo_set_rate --group-by channel,metric_time__month
+```
+
+### Snowflake Cortex Analyst (`semantic/semantic_model.yaml`)
+
+Parallel spec in Snowflake's format. Describes the same three tables with `base_table` references pointing at `DEMO_DB.GTM_CASE_PROD.*`. Includes six `verified_queries` — pre-validated question/SQL pairs used as few-shot grounding examples for the query agent.
+
+Upload to a Snowflake stage and reference in your Cortex Analyst configuration. Once mounted, the layer supports plain-English GTM queries without an analyst in the loop:
+
+> "What was outbound CAC each month in 2024?"  
+> "Is the CAC:LTV ratio improving or deteriorating?"  
+> "How many hot leads are there right now?"  
+> "Which channel has better unit economics?"
+
+Both specs include rich column descriptions with business context — tier thresholds, cohort attribution caveats, channel definitions — so query agents produce accurate, grounded answers rather than syntactically correct but semantically wrong SQL.
+
+---
+
 ## Source Data Quality Notes
 
 | Issue                    | Detail                                                                                    | Resolution                                                                                                                        |
@@ -146,6 +180,8 @@ Two changes required when targeting Snowflake (`demo_db.gtm_case`):
    ```
 
 3. **Final CTE type casts** — the explicit `::varchar` and `::numeric(p,s)` casts in mart `final` CTEs are Postgres workarounds for `on_schema_change='fail'` type matching. Snowflake handles these equivalences natively; the casts are harmless to leave in place but can be removed for cleaner SQL.
+
+4. **Semantic layer** — update `base_table` references in `semantic/semantic_model.yaml` if your Snowflake database or schema names differ from `DEMO_DB.GTM_CASE_PROD`. No changes to `_dbt/models/metrics.yml` required.
 
 Staging models already use `{{ source('gtm_case', 'table_name') }}` — no changes needed there. Seeds remain as the local dev proxy; on Snowflake they are bypassed entirely by the source definitions.
 
