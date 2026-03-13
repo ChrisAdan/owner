@@ -1,0 +1,413 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Owner GTM Analytics — Snowflake Cortex Analyst Semantic Model
+# ──────────────────────────────────────────────────────────────────────────────
+# Format: Snowflake Cortex Analyst (semantic_model.yaml spec)
+# Target: DEMO_DB.GTM_CASE_PROD (Snowflake production schema)
+#
+# This file is the parallel spec to metrics.yml for the dbt Semantic Layer.
+# It grounds a Claude Code / Cortex Analyst query agent in the mart definitions
+# so that plain-English GTM questions resolve to correct, governed SQL without
+# an analyst in the loop.
+#
+# Usage: Upload to a Snowflake stage, reference in your Cortex Analyst setup.
+# Claude Code integration: pass this file as context in the system prompt, or
+# mount the stage and reference it in your Claude Code workspace.
+#
+# Example questions this model supports:
+#   "What was outbound CAC in June?"
+#   "Show me conversion rate by channel for Q1 2024"
+#   "How many hot leads are there right now?"
+#   "Which channel has the better CAC:LTV ratio?"
+#   "What happened to the outbound funnel between January and June?"
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: owner_gtm_analytics
+description: >
+  GTM analytics semantic layer for Owner.com. Covers the inbound and outbound
+  sales funnel, customer acquisition cost, estimated lifetime value, and the
+  rule-based lead scoring model. Source data spans Jan–Jun 2024 for cost metrics
+  and full history for funnel and lead-universe queries.
+
+tables:
+  # ── MART: CAC / LTV ─────────────────────────────────────────────────────────
+  - name: mart_cac_ltv
+    description: >
+      One row per channel (inbound / outbound) per calendar month, Jan–Jun 2024.
+      Combines GTM cost data with funnel conversion counts and estimated LTV for
+      won customers. Primary table for CAC analysis and unit economics.
+    base_table: DEMO_DB.GTM_CASE_PROD.MART_CAC_LTV
+    primary_key:
+      columns:
+        - cac_ltv_sk
+
+    time_dimensions:
+      - name: month_date
+        expr: month_date
+        description: First day of the cohort month. Use for time-series CAC/LTV trends.
+        data_type: date
+        default_granularity: month
+
+    dimensions:
+      - name: channel
+        expr: channel
+        description: >
+          Sales channel. 'inbound' = SDR-driven, paid ad (Facebook/Google) traffic.
+          'outbound' = BDR-driven cold outreach. Always filter or group by channel
+          when comparing CAC — blended CAC conflates two very different cost structures.
+        data_type: text
+        sample_values:
+          - inbound
+          - outbound
+
+    measures:
+      - name: total_cost_usd
+        expr: total_cost_usd
+        description: >
+          Total channel GTM spend for the month. Includes salary, commissions, and
+          (for inbound only) paid advertising. Outbound spend is headcount only.
+        data_type: number
+        default_aggregation: sum
+
+      - name: new_customers_won
+        expr: new_customers_won
+        description: >
+          Closed won opportunities cohort-attributed to this channel and month.
+          Cohort = month lead entered the funnel, not month they closed.
+          Late-window months (May–Jun) may undercount as leads haven't had time
+          to close — interpret Jun 2024 outbound CAC ($6,250) with this in mind.
+        data_type: number
+        default_aggregation: sum
+
+      - name: cac_usd
+        expr: cac_usd
+        description: >
+          Customer acquisition cost = total_cost_usd / new_customers_won.
+          Null where new_customers_won = 0. Healthy benchmark for subscription
+          businesses: CAC:LTV > 3. Jun 2024 outbound ratio = 1.6x.
+        data_type: number
+        default_aggregation: avg
+
+      - name: avg_estimated_ltv_usd
+        expr: avg_estimated_ltv_usd
+        description: >
+          Average estimated annual LTV for won customers in this cohort.
+          Calculated as (predicted_monthly_gmv_usd × 0.05 × 12) + ($500 × 12),
+          representing Owner's 5% GMV take rate plus subscription revenue.
+          Proxy only — not realized revenue.
+        data_type: number
+        default_aggregation: avg
+
+      - name: cac_ltv_ratio
+        expr: cac_ltv_ratio
+        description: >
+          avg_estimated_ltv_usd / cac_usd. Benchmark: > 3x healthy.
+          Jan 2024 outbound = 5.9x (healthy). Jun 2024 outbound = 1.6x
+          (approaching viability floor — primary GTM risk signal in this dataset).
+        data_type: number
+        default_aggregation: avg
+
+    filters:
+      - name: inbound_only
+        expr: channel = 'inbound'
+      - name: outbound_only
+        expr: channel = 'outbound'
+      - name: jan_jun_2024
+        expr: month_date between '2024-01-01' and '2024-06-01'
+
+  # ── MART: GTM FUNNEL ────────────────────────────────────────────────────────
+  - name: mart_gtm_funnel
+    description: >
+      One row per channel per calendar month. Full funnel history from 2020.
+      Contains lead creation counts, funnel stage progression, conversion rates,
+      and average engagement timing for each channel cohort. Use for funnel
+      bottleneck analysis, stage-rate trends, and response-time benchmarking.
+      Filter to 2024 for channel comparison — earlier months are inbound-only.
+    base_table: DEMO_DB.GTM_CASE_PROD.MART_GTM_FUNNEL
+    primary_key:
+      columns:
+        - gtm_funnel_sk
+
+    time_dimensions:
+      - name: month_date
+        expr: month_date
+        description: >
+          First day of the cohort month. Channel-aware: inbound uses
+          form_submission_date, outbound uses first_sales_call_at.
+        data_type: date
+        default_granularity: month
+
+    dimensions:
+      - name: channel
+        expr: channel
+        description: Sales channel — inbound or outbound.
+        data_type: text
+
+    measures:
+      - name: leads_created
+        expr: leads_created
+        description: Leads entering the funnel this month for this channel.
+        data_type: number
+        default_aggregation: sum
+
+      - name: demos_set
+        expr: demos_set
+        description: Leads that progressed to a scheduled demo.
+        data_type: number
+        default_aggregation: sum
+
+      - name: demos_held
+        expr: demos_held
+        description: Leads where a demo was actually conducted.
+        data_type: number
+        default_aggregation: sum
+
+      - name: closed_won
+        expr: closed_won
+        description: Leads that converted to closed won.
+        data_type: number
+        default_aggregation: sum
+
+      - name: lead_to_demo_set_rate
+        expr: lead_to_demo_set_rate
+        description: >
+          demos_set / leads_created. Top-of-funnel efficiency.
+          Outbound rate fell from 5.3% (Jan 2024) to 1.8% (Jun 2024),
+          indicating list quality or contact rate degradation — not
+          AE close performance.
+        data_type: number
+        default_aggregation: avg
+
+      - name: demo_to_close_rate
+        expr: demo_to_close_rate
+        description: closed_won / demos_held. AE close efficiency.
+        data_type: number
+        default_aggregation: avg
+
+      - name: overall_conversion_rate
+        expr: overall_conversion_rate
+        description: closed_won / leads_created. End-to-end funnel efficiency.
+        data_type: number
+        default_aggregation: avg
+
+      - name: avg_speed_to_first_contact_hours
+        expr: avg_speed_to_first_contact_hours
+        description: >
+          Average hours from inbound form submission to first sales call.
+          Inbound channel only — null for outbound.
+          Key insight: leads contacted within 72h convert at ~47%;
+          leads contacted after one week convert at ~20%.
+        data_type: number
+        default_aggregation: avg
+
+      - name: avg_days_in_funnel
+        expr: avg_days_in_funnel
+        description: Average days in funnel for converted leads. Measures sales cycle length.
+        data_type: number
+        default_aggregation: avg
+
+    filters:
+      - name: outbound_2024
+        expr: "channel = 'outbound' and month_date between '2024-01-01' and '2024-06-01'"
+      - name: inbound_2024
+        expr: "channel = 'inbound' and month_date between '2024-01-01' and '2024-06-01'"
+
+  # ── MART: LEAD SCORING ──────────────────────────────────────────────────────
+  - name: mart_leading_indicators
+    description: >
+      One row per lead. Full prospect universe with rule-based conversion tier
+      scoring. Use for SDR/BDR queue prioritization, pipeline segmentation, and
+      prospect quality analysis. Not a time-series table — queries return counts
+      and averages across the current lead population.
+
+      Tier definitions (from observed conversion rates):
+        hot:       connected_with_decision_maker = true → 24–41% conversion
+        warm:      activity > 0 AND (speed ≤ 72h OR predicted GMV > $6,279/mo) → ~5.2%
+        converted: already a customer → upsell/expansion target
+        cold:      all remaining active leads → ~1.6%
+        null:      disqualified leads (excluded from scoring)
+    base_table: DEMO_DB.GTM_CASE_PROD.MART_LEADING_INDICATORS
+    primary_key:
+      columns:
+        - lead_sk
+
+    dimensions:
+      - name: channel
+        expr: channel
+        description: Sales channel — inbound or outbound.
+        data_type: text
+
+      - name: conversion_probability_tier
+        expr: conversion_probability_tier
+        description: >
+          Rule-based tier derived from observed conversion rates.
+          hot > warm > converted > cold. Null for disqualified leads.
+        data_type: text
+        sample_values:
+          - hot
+          - warm
+          - converted
+          - cold
+
+      - name: is_converted
+        expr: is_converted
+        description: True if lead has converted to an opportunity.
+        data_type: boolean
+
+      - name: is_disqualified
+        expr: is_disqualified
+        description: True if lead is in a terminal non-converting status.
+        data_type: boolean
+
+      - name: connected_with_decision_maker
+        expr: connected_with_decision_maker
+        description: >
+          Whether SDR/BDR reached a decision maker. The single strongest
+          conversion signal — 10x lift vs not connected.
+        data_type: boolean
+
+      - name: has_olo_tool
+        expr: has_olo_tool
+        description: >
+          Whether the restaurant uses a first-party online ordering tool
+          (e.g. Toast, Square, Olo). Different sales motion vs pure
+          3rd-party-dependent restaurants.
+        data_type: boolean
+
+    measures:
+      - name: lead_count
+        expr: lead_sk
+        description: Total leads in scope.
+        data_type: text
+        default_aggregation: count
+
+      - name: avg_predicted_monthly_gmv_usd
+        expr: predicted_monthly_gmv_usd
+        description: >
+          Average predicted monthly GMV across leads in scope.
+          GMV > $6,279/mo (dataset p75) is a warm-tier qualifier.
+        data_type: number
+        default_aggregation: avg
+
+      - name: avg_speed_to_first_contact_hours
+        expr: speed_to_first_contact_hours
+        description: Average speed to first contact. Inbound only — outbound is null.
+        data_type: number
+        default_aggregation: avg
+
+      - name: avg_activity_density_score
+        expr: activity_density_score
+        description: >
+          Average engagement intensity (touches / days in funnel).
+          Use for within-tier ranking, not as a standalone threshold.
+        data_type: number
+        default_aggregation: avg
+
+    filters:
+      - name: hot_leads
+        expr: conversion_probability_tier = 'hot'
+      - name: warm_leads
+        expr: conversion_probability_tier = 'warm'
+      - name: cold_leads
+        expr: conversion_probability_tier = 'cold'
+      - name: converted_customers
+        expr: conversion_probability_tier = 'converted'
+      - name: active_unscored
+        expr: is_disqualified = false and conversion_probability_tier is not null
+      - name: inbound_active
+        expr: "channel = 'inbound' and is_disqualified = false"
+      - name: outbound_active
+        expr: "channel = 'outbound' and is_disqualified = false"
+
+# ── VERIFIED QUERIES ──────────────────────────────────────────────────────────
+# Pre-validated question → SQL mappings. Cortex Analyst uses these as
+# few-shot examples to improve query generation accuracy.
+# ──────────────────────────────────────────────────────────────────────────────
+
+verified_queries:
+  - name: outbound_cac_by_month
+    question: "What was outbound CAC each month in 2024?"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        month_date,
+        cac_usd,
+        new_customers_won,
+        cac_ltv_ratio
+      from DEMO_DB.GTM_CASE_PROD.MART_CAC_LTV
+      where channel = 'outbound'
+        and month_date between '2024-01-01' and '2024-06-01'
+      order by month_date
+
+  - name: funnel_stage_rates_by_channel
+    question: "Compare funnel conversion rates for inbound vs outbound in 2024"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        channel,
+        month_date,
+        leads_created,
+        lead_to_demo_set_rate,
+        demo_to_close_rate,
+        overall_conversion_rate
+      from DEMO_DB.GTM_CASE_PROD.MART_GTM_FUNNEL
+      where month_date between '2024-01-01' and '2024-06-01'
+      order by channel, month_date
+
+  - name: lead_tier_counts
+    question: "How many leads are in each conversion tier right now?"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        channel,
+        conversion_probability_tier,
+        count(*) as lead_count,
+        round(avg(predicted_monthly_gmv_usd), 0) as avg_gmv_usd
+      from DEMO_DB.GTM_CASE_PROD.MART_LEADING_INDICATORS
+      where is_disqualified = false
+        or is_disqualified is null
+      group by channel, conversion_probability_tier
+      order by channel, conversion_probability_tier
+
+  - name: cac_ltv_trend
+    question: "Is the CAC:LTV ratio improving or deteriorating?"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        channel,
+        month_date,
+        cac_usd,
+        avg_estimated_ltv_usd,
+        cac_ltv_ratio,
+        lag(cac_ltv_ratio) over (partition by channel order by month_date) as prev_month_ratio,
+        cac_ltv_ratio - lag(cac_ltv_ratio) over (partition by channel order by month_date) as mom_change
+      from DEMO_DB.GTM_CASE_PROD.MART_CAC_LTV
+      order by channel, month_date
+
+  - name: hot_lead_pipeline_value
+    question: "What is the estimated pipeline value of hot leads?"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        channel,
+        count(*) as hot_lead_count,
+        round(avg(predicted_monthly_gmv_usd), 0) as avg_gmv_usd,
+        round(avg(estimated_annual_ltv_usd), 0) as avg_ltv_usd,
+        round(sum(estimated_annual_ltv_usd), 0) as total_pipeline_ltv_usd
+      from DEMO_DB.GTM_CASE_PROD.MART_LEADING_INDICATORS
+      where conversion_probability_tier = 'hot'
+      group by channel
+
+  - name: speed_impact_on_conversion
+    question: "Does responding faster to inbound leads improve conversion?"
+    verified_at: "2024-03-01"
+    sql: |
+      select
+        month_date,
+        channel,
+        avg_speed_to_first_contact_hours,
+        overall_conversion_rate,
+        lead_to_demo_set_rate
+      from DEMO_DB.GTM_CASE_PROD.MART_GTM_FUNNEL
+      where channel = 'inbound'
+        and month_date between '2024-01-01' and '2024-06-01'
+      order by month_date
