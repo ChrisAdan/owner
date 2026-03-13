@@ -14,7 +14,8 @@ _dbt/
 │   ├── _docs/            # Reusable doc blocks by domain
 │   ├── staging/          # One model per source table; cleaning, typing, deduplication
 │   ├── intermediate/     # Joins, enrichment, and derived metrics
-│   └── marts/            # Business-grain incremental tables for consumption
+│   ├── marts/            # Business-grain incremental tables for consumption
+│   └── semantic/         # MetricFlow time spine + metrics.yml semantic layer spec
 ├── seeds/                # Source data proxies (replaced by {{ source() }} on Snowflake)
 └── tests/                # Singular data tests
 ```
@@ -99,6 +100,39 @@ One row per calendar month, scoped to Jan–Jun 2024. Joins estimated revenue (`
 
 ---
 
+<<<<<<< Updated upstream
+=======
+## Semantic Layer
+
+The mart layer is designed to serve both human analysts and LLM query agents. Two semantic specs sit on top of the marts — one for each integration path.
+
+### dbt Semantic Layer / MetricFlow (`_dbt/models/metrics.yml`)
+
+Defines three semantic models (`gtm_channel_month`, `gtm_funnel`, `lead_universe`) and 15 named metrics covering CAC, LTV, funnel rates, and lead tier counts. Requires dbt Core 1.6+ and the dbt Semantic Layer API.
+
+```bash
+# Example queries via dbt-sl CLI or a connected BI tool
+mf query --metrics cac_usd,cac_ltv_ratio --group-by channel,month_date__month
+mf query --metrics hot_lead_count,warm_lead_count --group-by channel
+mf query --metrics lead_to_demo_set_rate --group-by channel,month_date__month
+```
+
+### Snowflake Cortex Analyst (`semantic/semantic_model.yaml`)
+
+Parallel spec in Snowflake's format. Describes the same three tables with `base_table` references pointing at `DEMO_DB.GTM_CASE_PROD.*`. Includes six `verified_queries` — pre-validated question/SQL pairs used as few-shot grounding examples for the query agent.
+
+Upload to a Snowflake stage and reference in your Cortex Analyst configuration. Once mounted, the layer supports plain-English GTM queries without an analyst in the loop:
+
+> "What was outbound CAC each month in 2024?"  
+> "Is the CAC:LTV ratio improving or deteriorating?"  
+> "How many hot leads are there right now?"  
+> "Which channel has better unit economics?"
+
+Both specs include rich column descriptions with business context — tier thresholds, cohort attribution caveats, channel definitions — so query agents produce accurate, grounded answers rather than syntactically correct but semantically wrong SQL.
+
+---
+
+>>>>>>> Stashed changes
 ## Source Data Quality Notes
 
 | Issue                    | Detail                                                                                    | Resolution                                                                                                                        |
