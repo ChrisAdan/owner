@@ -103,12 +103,6 @@ One row per calendar month, scoped to Jan–Jun 2024. Joins estimated revenue (`
 - Depends on `mart_cac_ltv` — mart-to-mart reference, intentional. The expense window scoping already lives in `mart_cac_ltv`; duplicating it here would create drift risk.
 
 ---
-
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> 58338d78a675b9ca5f3f581518e4316ec8b87430
 ## Semantic Layer
 
 The mart layer is designed to serve both human analysts and LLM query agents. Two semantic specs sit on top of the marts — one for each integration path.
@@ -119,15 +113,9 @@ Defines three semantic models (`gtm_channel_month`, `gtm_funnel`, `lead_universe
 
 ```bash
 # Example queries via dbt-sl CLI or a connected BI tool
-<<<<<<< HEAD
 mf query --metrics cac_usd,cac_ltv_ratio --group-by channel,month_date__month
 mf query --metrics hot_lead_count,warm_lead_count --group-by channel
 mf query --metrics lead_to_demo_set_rate --group-by channel,month_date__month
-=======
-mf query --metrics cac_usd,cac_ltv_ratio --group-by channel,metric_time__month
-mf query --metrics hot_lead_count,warm_lead_count --group-by channel
-mf query --metrics lead_to_demo_set_rate --group-by channel,metric_time__month
->>>>>>> 58338d78a675b9ca5f3f581518e4316ec8b87430
 ```
 
 ### Snowflake Cortex Analyst (`semantic/semantic_model.yaml`)
@@ -144,11 +132,6 @@ Upload to a Snowflake stage and reference in your Cortex Analyst configuration. 
 Both specs include rich column descriptions with business context — tier thresholds, cohort attribution caveats, channel definitions — so query agents produce accurate, grounded answers rather than syntactically correct but semantically wrong SQL.
 
 ---
-
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> 58338d78a675b9ca5f3f581518e4316ec8b87430
 ## Source Data Quality Notes
 
 | Issue                    | Detail                                                                                    | Resolution                                                                                                                        |
